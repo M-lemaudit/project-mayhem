@@ -13,10 +13,12 @@ chromium.use(stealth);
 
 const LOGIN_URL = 'https://partner.blacklane.com/login';
 const LOGIN_TIMEOUT_MS = 60_000;
-const POST_LOGIN_WAIT_MS = 15_000;
+/** Time to wait for a request with Authorization: Bearer after clicking login. */
+const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 
-/** Known localStorage keys where Blacklane may store the Bearer token. */
-const TOKEN_KEYS = ['bl_auth_token', 'access_token', 'token', 'auth', 'session'];
+/** URL pattern for Blacklane auth API (token visible in Network tab). */
+const ATHENA_HOST = 'athena.blacklane.com';
+const BEARER_PREFIX = 'Bearer ';
 
 /** Serializable cookie shape for storage and reuse in API client. */
 export interface AuthCookie {
@@ -30,10 +32,22 @@ export interface AuthCookie {
   sameSite?: 'Strict' | 'Lax' | 'None';
 }
 
+/** Debug dump from Deep Inspection mode (do not fail when token not in known keys). */
+export interface DeepInspectionDebug {
+  localStorageKeys: string[];
+  sessionStorageKeys: string[];
+  cookieNames: string[];
+  potentialTokenKeys: string[];
+  rawLocalStorage: Record<string, string>;
+  rawSessionStorage: Record<string, string>;
+}
+
 export interface AuthResult {
   accessToken: string;
   cookies: AuthCookie[];
   userAgent: string;
+  /** Set when Deep Inspection ran (token may be null; inspect debug and logs). */
+  debug?: DeepInspectionDebug;
 }
 
 export class AuthError extends Error {
@@ -65,31 +79,17 @@ async function humanType(page: Page, selector: string, value: string): Promise<v
 }
 
 /**
- * Extract Bearer token from localStorage dump.
- * Tries known keys and parses JSON values for nested token fields.
+ * Normalize Authorization header to raw token (strip "Bearer " prefix).
  */
-function findAccessToken(localStorageDump: Record<string, string>): string | null {
-  for (const key of TOKEN_KEYS) {
-    const raw = localStorageDump[key];
-    if (typeof raw !== 'string' || !raw.trim()) continue;
-    const trimmed = raw.trim();
-    if (trimmed.length > 20 && !trimmed.startsWith('{')) {
-      return trimmed;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      if (typeof parsed.access_token === 'string') return parsed.access_token;
-      if (typeof parsed.token === 'string') return parsed.token;
-      if (typeof parsed.accessToken === 'string') return parsed.accessToken;
-    } catch {
-      if (trimmed.length > 20) return trimmed;
-    }
-  }
-  return null;
+function normalizeBearerToken(authHeader: string | undefined): string {
+  if (!authHeader || typeof authHeader !== 'string') return '';
+  const trimmed = authHeader.trim();
+  return trimmed.startsWith(BEARER_PREFIX) ? trimmed.slice(BEARER_PREFIX.length) : trimmed;
 }
 
 /**
  * Log in to Blacklane partner portal and return access token + cookies.
+ * Token is captured via network interception (Authorization header), not from storage.
  * Closes the browser before returning. Throws AuthError on failure.
  */
 export async function loginAndGetToken(
@@ -125,45 +125,44 @@ export async function loginAndGetToken(
 
     const submitSelector =
       'button[type="submit"], input[type="submit"], [data-testid*="login"], button:has-text("Log in"), button:has-text("Sign in")';
+
+    logger.info('Network listener: waiting for request with Authorization header');
+    const tokenPromise = page.waitForRequest(
+      (request) => {
+        const url = request.url();
+        const headers = request.headers();
+        const auth = headers['authorization'] ?? headers['Authorization'];
+        const hasAthena = url.includes(ATHENA_HOST);
+        const hasBearer = typeof auth === 'string' && auth.startsWith(BEARER_PREFIX);
+        return (hasAthena && !!auth) || hasBearer;
+      },
+      { timeout: TOKEN_REQUEST_TIMEOUT_MS }
+    );
+
     await page.click(submitSelector, { timeout: 5_000 });
 
-    await delay(2_000);
-
+    let request;
     try {
-      await Promise.race([
-        page.waitForURL((u) => !u.pathname.includes('/login'), { timeout: POST_LOGIN_WAIT_MS }),
-        page.waitForSelector('button:has-text("Logout"), [data-logout], [href*="logout"], [class*="dashboard"]', {
-          timeout: POST_LOGIN_WAIT_MS,
-        }),
-      ]);
+      request = await tokenPromise;
     } catch {
       const currentUrl = page.url();
       if (currentUrl.includes('/login')) {
         throw new AuthError('Login did not complete; still on login page', 'INVALID_CREDENTIALS');
       }
-    }
-
-    logger.info('Token extraction (localStorage + cookies)');
-    /* eslint-disable no-undef -- runs in browser context */
-    const localStorageDump = await page.evaluate((): Record<string, string> => {
-      const out: Record<string, string> = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key) out[key] = localStorage.getItem(key) ?? '';
-      }
-      return out;
-    });
-    /* eslint-enable no-undef */
-
-    const accessToken = findAccessToken(localStorageDump);
-    if (!accessToken) {
-      const keys = Object.keys(localStorageDump);
-      logger.warn('Token not in known keys; localStorage keys', { keys });
       throw new AuthError(
-        `Bearer token not found in localStorage (checked: ${TOKEN_KEYS.join(', ')})`,
+        `No request with Authorization header within ${TOKEN_REQUEST_TIMEOUT_MS}ms (check athena.blacklane.com or Bearer in Network tab)`,
         'TOKEN_NOT_FOUND'
       );
     }
+    const authHeader = request.headers()['authorization'] ?? request.headers()['Authorization'];
+    const accessToken = normalizeBearerToken(authHeader);
+    if (!accessToken) {
+      throw new AuthError(
+        'Request had no Authorization header or empty Bearer token',
+        'TOKEN_NOT_FOUND'
+      );
+    }
+    logger.info('Token captured from network', { url: request.url() });
 
     const cookies = await context.cookies();
     const authCookies: AuthCookie[] = cookies.map((c) => ({
@@ -176,6 +175,7 @@ export async function loginAndGetToken(
       secure: c.secure,
       sameSite: c.sameSite as AuthCookie['sameSite'],
     }));
+    logger.info('Cookies captured', { count: authCookies.length });
 
     const userAgent = await page.evaluate((): string => {
       /* eslint-disable-next-line no-undef -- runs in browser context */

@@ -8,5 +8,6 @@ export {
   AuthError,
   AuthCookie,
   AuthResult,
+  DeepInspectionDebug,
   loginAndGetToken,
 } from './auth';
