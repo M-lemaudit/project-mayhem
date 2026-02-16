@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: blacklane-sniper
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    # Uncomment when Supabase is configured
+    # environment:
+    #   - SUPABASE_URL=${SUPABASE_URL}
+    #   - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
