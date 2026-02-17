@@ -1,0 +1,38 @@
+{
+  "node": {
+    "34400031a7c6074c1fad0a530e2f04098d5ec572": {
+      "workers": {
+        "app/dashboard/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22C%3A%5C%5CProgrammation%5C%5CVolteyr%5C%5CBot_blacklane%5C%5Cadmin%5C%5Capp%5C%5Cactions%5C%5Cbots.ts%22%2C%5B%22addClient%22%2C%22updateClient%22%2C%22deleteClient%22%2C%22toggleClientStatus%22%5D%5D%5D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/dashboard/page": "action-browser"
+      }
+    },
+    "71c88d3a75abad15b9b03a101d5614c743bccb7c": {
+      "workers": {
+        "app/dashboard/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22C%3A%5C%5CProgrammation%5C%5CVolteyr%5C%5CBot_blacklane%5C%5Cadmin%5C%5Capp%5C%5Cactions%5C%5Cbots.ts%22%2C%5B%22addClient%22%2C%22updateClient%22%2C%22deleteClient%22%2C%22toggleClientStatus%22%5D%5D%5D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/dashboard/page": "action-browser"
+      }
+    },
+    "a2b9f1bd1f4c1f90bc017e3f920c3c45cd8fa9b6": {
+      "workers": {
+        "app/dashboard/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22C%3A%5C%5CProgrammation%5C%5CVolteyr%5C%5CBot_blacklane%5C%5Cadmin%5C%5Capp%5C%5Cactions%5C%5Cbots.ts%22%2C%5B%22addClient%22%2C%22updateClient%22%2C%22deleteClient%22%2C%22toggleClientStatus%22%5D%5D%5D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/dashboard/page": "action-browser"
+      }
+    },
+    "f8b6abca6b0f142e5ac34c622abd2059f9753973": {
+      "workers": {
+        "app/dashboard/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22C%3A%5C%5CProgrammation%5C%5CVolteyr%5C%5CBot_blacklane%5C%5Cadmin%5C%5Capp%5C%5Cactions%5C%5Cbots.ts%22%2C%5B%22addClient%22%2C%22updateClient%22%2C%22deleteClient%22%2C%22toggleClientStatus%22%5D%5D%5D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/dashboard/page": "action-browser"
+      }
+    }
+  },
+  "edge": {},
+  "encryptionKey": "ptciP2eVeBuzRBtjJW5kB+44rYOTahz3eFtkiFjwUdU="
+}

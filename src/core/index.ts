@@ -9,5 +9,9 @@ export {
   AuthCookie,
   AuthResult,
   DeepInspectionDebug,
+  isSavedSessionUsable,
+  SavedSession,
   loginAndGetToken,
 } from './auth';
+export { FilterEngine, BotFilters, OfferShape, MatchResult } from './filter-engine';
+export { SniperLoop } from './sniper-loop';

@@ -7,6 +7,7 @@ import type { Page } from 'playwright-core';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { logger } from '../utils';
+import { decrypt, looksEncrypted } from '../utils/crypto';
 
 const stealth = StealthPlugin();
 chromium.use(stealth);
@@ -19,6 +20,8 @@ const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 /** URL pattern for Blacklane auth API (token visible in Network tab). */
 const ATHENA_HOST = 'athena.blacklane.com';
 const BEARER_PREFIX = 'Bearer ';
+/** Fallback Accept when browser does not send it in the captured request. */
+const DEFAULT_ACCEPT = 'application/vnd.blacklane.v2+json';
 
 /** Serializable cookie shape for storage and reuse in API client. */
 export interface AuthCookie {
@@ -45,7 +48,14 @@ export interface DeepInspectionDebug {
 export interface AuthResult {
   accessToken: string;
   cookies: AuthCookie[];
+  /** Browser's User-Agent string (from navigator.userAgent), for API request consistency. */
   userAgent: string;
+  /** Exact Accept header from the captured athena request (fixes 406). */
+  acceptHeader: string;
+  /** From request header x-blacklane-context (if present). */
+  xBlacklaneContext?: string;
+  /** From request header x-device-id (if present). */
+  xDeviceId?: string;
   /** Set when Deep Inspection ran (token may be null; inspect debug and logs). */
   debug?: DeepInspectionDebug;
 }
@@ -87,16 +97,60 @@ function normalizeBearerToken(authHeader: string | undefined): string {
   return trimmed.startsWith(BEARER_PREFIX) ? trimmed.slice(BEARER_PREFIX.length) : trimmed;
 }
 
+/** Minimal session shape stored in Supabase. Used for Zero-Touch fast login. */
+export interface SavedSession {
+  accessToken?: string;
+  cookies?: AuthCookie[];
+  userAgent?: string;
+  acceptHeader?: string;
+  xBlacklaneContext?: string;
+  xDeviceId?: string;
+}
+
+/**
+ * Check if a saved session has accessToken AND cookies. Assume valid if both present.
+ */
+export function isSavedSessionUsable(saved: unknown): saved is SavedSession {
+  if (!saved || typeof saved !== 'object') return false;
+  const obj = saved as Record<string, unknown>;
+  const token = obj.accessToken;
+  const cookies = obj.cookies;
+  return (
+    typeof token === 'string' &&
+    token.trim().length > 0 &&
+    Array.isArray(cookies)
+  );
+}
+
+/**
+ * Reconstruct AuthResult from a saved session. Call only when isSavedSessionUsable is true.
+ */
+function savedSessionToAuthResult(saved: SavedSession): AuthResult {
+  return {
+    accessToken: saved.accessToken!,
+    cookies: Array.isArray(saved.cookies) ? (saved.cookies as AuthCookie[]) : [],
+    userAgent: typeof saved.userAgent === 'string' ? saved.userAgent : '',
+    acceptHeader: typeof saved.acceptHeader === 'string' ? saved.acceptHeader : DEFAULT_ACCEPT,
+    ...(saved.xBlacklaneContext && { xBlacklaneContext: saved.xBlacklaneContext }),
+    ...(saved.xDeviceId && { xDeviceId: saved.xDeviceId }),
+  };
+}
+
 /**
  * Log in to Blacklane partner portal and return access token + cookies.
- * Token is captured via network interception (Authorization header), not from storage.
- * Closes the browser before returning. Throws AuthError on failure.
+ * Step A: If savedSession has accessToken AND cookies → return immediately (no browser).
+ * Step B: Otherwise, fallback to Playwright browser login.
+ * Step C: Returns { accessToken, cookies, userAgent, acceptHeader }.
  */
 export async function loginAndGetToken(
   email: string,
-  password: string
+  password: string,
+  savedSession?: unknown
 ): Promise<AuthResult> {
-  logger.info('Browser launch (stealth)', { headless: false });
+  if (isSavedSessionUsable(savedSession)) {
+    return savedSessionToAuthResult(savedSession);
+  }
+
   const browser = await chromium.launch({
     headless: false,
     args: ['--disable-blink-features=AutomationControlled'],
@@ -110,7 +164,6 @@ export async function loginAndGetToken(
     });
     const page = await context.newPage();
 
-    logger.info('Navigating to login', { url: LOGIN_URL });
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: LOGIN_TIMEOUT_MS });
 
     const emailSelector = 'input[name="email"], input[type="email"], input[id*="email"]';
@@ -118,15 +171,15 @@ export async function loginAndGetToken(
     await page.waitForSelector(emailSelector, { timeout: 10_000 });
     await page.waitForSelector(passwordSelector, { timeout: 10_000 });
 
-    logger.info('Credentials entered');
+    const plainPassword = looksEncrypted(password) ? decrypt(password) : password;
+
     await humanType(page, emailSelector, email);
     await delay(randomDelayMs(200, 500));
-    await humanType(page, passwordSelector, password);
+    await humanType(page, passwordSelector, plainPassword);
 
     const submitSelector =
       'button[type="submit"], input[type="submit"], [data-testid*="login"], button:has-text("Log in"), button:has-text("Sign in")';
 
-    logger.info('Network listener: waiting for request with Authorization header');
     const tokenPromise = page.waitForRequest(
       (request) => {
         const url = request.url();
@@ -154,7 +207,8 @@ export async function loginAndGetToken(
         'TOKEN_NOT_FOUND'
       );
     }
-    const authHeader = request.headers()['authorization'] ?? request.headers()['Authorization'];
+    const headers = request.headers();
+    const authHeader = headers['authorization'] ?? headers['Authorization'];
     const accessToken = normalizeBearerToken(authHeader);
     if (!accessToken) {
       throw new AuthError(
@@ -162,8 +216,10 @@ export async function loginAndGetToken(
         'TOKEN_NOT_FOUND'
       );
     }
-    logger.info('Token captured from network', { url: request.url() });
-
+    const acceptHeader =
+      (headers['accept'] ?? headers['Accept'] ?? '').trim() || DEFAULT_ACCEPT;
+    const xBlacklaneContext = (headers['x-blacklane-context'] ?? '').trim() || undefined;
+    const xDeviceId = (headers['x-device-id'] ?? '').trim() || undefined;
     const cookies = await context.cookies();
     const authCookies: AuthCookie[] = cookies.map((c) => ({
       name: c.name,
@@ -175,18 +231,16 @@ export async function loginAndGetToken(
       secure: c.secure,
       sameSite: c.sameSite as AuthCookie['sameSite'],
     }));
-    logger.info('Cookies captured', { count: authCookies.length });
+    /* eslint-disable-next-line no-undef -- runs in browser context */
+    const userAgent = await page.evaluate(() => navigator.userAgent);
 
-    const userAgent = await page.evaluate((): string => {
-      /* eslint-disable-next-line no-undef -- runs in browser context */
-      return navigator.userAgent;
-    });
-
-    logger.info('Token extracted successfully');
     return {
       accessToken,
       cookies: authCookies,
       userAgent,
+      acceptHeader,
+      ...(xBlacklaneContext && { xBlacklaneContext }),
+      ...(xDeviceId && { xDeviceId }),
     };
   } finally {
     await browser.close();

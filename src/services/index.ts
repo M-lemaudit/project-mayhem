@@ -1,7 +1,12 @@
 /**
- * Services: Supabase client usage, auth manager, 2FA handler.
+ * Services: Supabase client usage, auth manager, Blacklane API client.
  * Supabase client singleton lives in config/supabase.ts.
  */
 
-// Placeholder exports until implementation
-export {};
+export { BlacklaneApi, TokenExpiredError, RateLimitError } from './blacklane-api';
+export {
+  BotStateService,
+  type BotConfig,
+  type BotRow,
+  type BotStatus,
+} from './bot-state';
