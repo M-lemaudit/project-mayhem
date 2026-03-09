@@ -113,7 +113,7 @@ export function EditClientDialog({
         password?: string;
         minPrice?: number;
         minHoursFromNow?: number;
-        minGapMinutes?: number;
+        minGapMinutes?: number | null;
         vehicleTypes?: string[];
         timezone?: string;
         locale?: string;
