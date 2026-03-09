@@ -390,8 +390,8 @@ export class BlacklaneApi {
   /**
    * Accept a Blacklane offer using the real partner-portal endpoint.
    *
-   * In non-production (IS_PRODUCTION !== 'true'), this method ONLY logs the
-   * request that would be sent and returns a mock success object.
+   * In non-production (IS_PRODUCTION not exactly 'true', case-insensitive), this
+   * method ONLY logs the request that would be sent and returns a mock success object.
    */
   async acceptOffer(
     offer: any
@@ -412,7 +412,8 @@ export class BlacklaneApi {
       'content-type': 'application/json',
     };
 
-    if (process.env.IS_PRODUCTION !== 'true') {
+    const isProduction = process.env.IS_PRODUCTION?.toLowerCase().trim() === 'true';
+    if (!isProduction) {
       // Safety kill-switch: never hit the real endpoint outside production.
       logger.info(`[SIMULATION] Would send POST to ${url} with Payload: ${JSON.stringify(payload)} (cleanPrice: ${cleanPrice}) and Headers: ${JSON.stringify(headers)}`);
       return { status: 'simulation_success', offer_id: payload.id as string | undefined };
