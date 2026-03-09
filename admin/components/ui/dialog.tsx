@@ -34,7 +34,7 @@ const DialogContent = React.forwardRef<
     role="dialog"
     aria-modal="true"
     className={cn(
-      'relative z-50 w-full max-w-lg rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-2xl',
+      'relative z-50 flex max-h-[90vh] w-full max-w-lg min-w-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-2xl',
       className
     )}
     onClick={(e) => e.stopPropagation()}
@@ -47,7 +47,7 @@ const DialogContent = React.forwardRef<
 DialogContent.displayName = 'DialogContent';
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('mb-4', className)} {...props} />
+  <div className={cn('shrink-0 mb-4', className)} {...props} />
 );
 
 const DialogTitle = ({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) => (

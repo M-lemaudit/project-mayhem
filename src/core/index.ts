@@ -13,5 +13,5 @@ export {
   SavedSession,
   loginAndGetToken,
 } from './auth';
-export { FilterEngine, BotFilters, OfferShape, MatchResult } from './filter-engine';
+export { FilterEngine, BotFilters, ExistingRide, OfferShape, MatchResult } from './filter-engine';
 export { SniperLoop } from './sniper-loop';

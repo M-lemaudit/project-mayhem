@@ -14,6 +14,11 @@
     "test:auth": "npm run build && node dist/scripts/test-auth-manual.js",
     "test:offers": "npm run build && node dist/scripts/test-fetch-offers.js",
     "test:sniper": "npm run build && node dist/scripts/test-sniper.js",
+    "test:bookings": "npm run build && node dist/scripts/test-fetch-bookings.js",
+    "test:planned-rides": "npm run build && node dist/scripts/test-fetch-planned-rides.js",
+    "test:integration-rides": "npm run build && node dist/scripts/test-integration-rides.js",
+    "test:gap": "npm run build && node dist/scripts/test-gap.js",
+    "start": "node dist/index.js",
     "admin:dev": "cd admin && npm run dev"
   },
   "keywords": [],
@@ -21,13 +26,14 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@supabase/supabase-js": "^2.47",
     "axios": "^1.7",
     "dotenv": "^16.4",
-    "winston": "^3.17",
+    "https-proxy-agent": "^7.0.6",
     "playwright-core": "^1.49",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "@supabase/supabase-js": "^2.47"
+    "winston": "^3.17"
   },
   "devDependencies": {
     "@eslint/js": "^9.15",

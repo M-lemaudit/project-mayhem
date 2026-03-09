@@ -1,102 +1,198 @@
 /**
- * Blacklane Sniper V2 - Entry point (daemon).
- * Le processus reste en vie. Il attend que le statut soit RUNNING (bouton Start dans l’admin),
- * puis lance auth + boucle sniper. Stop dans l’admin arrête la boucle ; le processus repasse en attente.
+ * Blacklane Sniper V2 - Fleet Manager.
+ * Manages multiple bots dynamically. Queries Supabase for RUNNING bots,
+ * starts/stops SniperLoop instances accordingly.
  */
 
 import 'dotenv/config';
 import { loginAndGetToken } from './core/auth';
 import { SniperLoop, type BotFilters } from './core';
-import { BlacklaneApi, BotStateService } from './services';
+import { BlacklaneApi, BotStateService, RideSyncService } from './services';
 import { logger } from './utils';
+import { getSupabase } from './config/supabase';
+import { decrypt, looksEncrypted } from './utils/crypto';
 
-const POLL_INTERVAL_MS = 10_000; // quand STOPPED, vérifier le statut toutes les 10 s
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+const proxyUrl = process.env.PROXY_URL?.trim();
+if (proxyUrl) {
+  console.log('[NETWORK] Proxy enabled: Routing traffic through IP Royal.');
 }
 
-async function runSniperSession(
-  email: string,
-  password: string,
-  botState: BotStateService
-): Promise<void> {
-  console.log('[BOT] Connexion Blacklane + session...');
-  const savedSession = await botState.getSession();
-  const session = await loginAndGetToken(email, password, savedSession);
-  await botState.saveSession({
-    accessToken: session.accessToken,
-    cookies: session.cookies,
-    userAgent: session.userAgent,
-    acceptHeader: session.acceptHeader,
-    ...(session.xBlacklaneContext && { xBlacklaneContext: session.xBlacklaneContext }),
-    ...(session.xDeviceId && { xDeviceId: session.xDeviceId }),
-  });
+const WATCHDOG_INTERVAL_MS = 10_000;
+const RIDE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
-  const api = new BlacklaneApi(session.accessToken, session.cookies, session.userAgent);
-  const rawFilters = await botState.getFilters();
-  const filters: BotFilters = {
-    minPrice: typeof rawFilters.minPrice === 'number' ? rawFilters.minPrice : 10,
-    allowedVehicleTypes: Array.isArray(rawFilters.allowedVehicleTypes)
-      ? (rawFilters.allowedVehicleTypes as string[])
-      : [],
-    ...(typeof rawFilters.maxPrice === 'number' && { maxPrice: rawFilters.maxPrice }),
-    ...(typeof rawFilters.minHoursFromNow === 'number' && { minHoursFromNow: rawFilters.minHoursFromNow }),
-  };
-
-  console.log('[BOT] Sniper démarré (Stop = dashboard).');
-  const sniper = new SniperLoop(api, filters, botState);
-  await sniper.start();
-  console.log('[BOT] Sniper arrêté, en attente du statut.\n');
+export interface RunningBotRow {
+  id: string;
+  email: string;
+  password: string | null;
+  timezone: string | null;
+  locale: string | null;
+  filters: Record<string, unknown>;
+  session: Record<string, unknown>;
+   /** Blacklane internal user id used for authenticated API actions (e.g. accept offer). */
+  blacklane_user_id: string | null;
 }
 
-async function main(): Promise<void> {
-  const email = process.env.BLACKLANE_EMAIL;
-  const password = process.env.BLACKLANE_PASSWORD;
-  if (!email || !password) {
-    console.error('[BOT] ❌ Erreur: BLACKLANE_EMAIL ou BLACKLANE_PASSWORD manquant dans .env');
-    process.exit(1);
+/** Fetches all bots with status RUNNING from Supabase. */
+async function fetchActiveBots(): Promise<RunningBotRow[]> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('bots')
+    .select('id, email, password, timezone, locale, filters, session, blacklane_user_id')
+    .eq('status', 'RUNNING');
+
+  if (error) {
+    logger.error('Fleet: failed to fetch active bots', { error: error.message });
+    return [];
   }
 
-  const botState = new BotStateService(email);
+  return (data ?? []) as RunningBotRow[];
+}
+
+/** Resolves plaintext password (decrypt if encrypted). */
+function resolvePassword(raw: string | null): string {
+  if (!raw || typeof raw !== 'string') {
+    throw new Error('Password missing for bot');
+  }
+  return looksEncrypted(raw) ? decrypt(raw) : raw;
+}
+
+/** Runs a single bot's sniper session. Fire-and-forget. */
+async function runBotInstance(
+  bot: RunningBotRow,
+  instances: Map<string, SniperLoop>,
+  pendingStarts: Set<string>
+): Promise<void> {
+  const { email } = bot;
+  const prefix = () => `[${email}]`;
+  pendingStarts.add(email);
+  let rideSyncInterval: ReturnType<typeof setInterval> | undefined;
+
+  try {
+    const password = resolvePassword(bot.password);
+    const botState = new BotStateService(email);
+
+    const browserOptions =
+      (bot.timezone?.trim() || bot.locale?.trim())
+        ? {
+            ...(bot.timezone?.trim() && { timezoneId: bot.timezone.trim() }),
+            ...(bot.locale?.trim() && { locale: bot.locale.trim() }),
+          }
+        : undefined;
+    logger.info(`${prefix()} Connecting to Blacklane...`);
+    const savedSession = await botState.getSession();
+    const session = await loginAndGetToken(email, password, savedSession, browserOptions);
+
+    await botState.saveSession({
+      accessToken: session.accessToken,
+      cookies: session.cookies,
+      userAgent: session.userAgent,
+      acceptHeader: session.acceptHeader,
+      ...(session.xBlacklaneContext && { xBlacklaneContext: session.xBlacklaneContext }),
+      ...(session.xDeviceId && { xDeviceId: session.xDeviceId }),
+    });
+
+    const blacklaneUserId = bot.blacklane_user_id;
+    if (!blacklaneUserId) {
+      throw new Error('blacklane_user_id is missing for bot ' + email);
+    }
+
+    const api = new BlacklaneApi(session.accessToken, session.cookies, session.userAgent, blacklaneUserId);
+    const rawFilters = await botState.getFilters();
+    const filters: BotFilters = {
+      minPrice: typeof rawFilters.minPrice === 'number' ? rawFilters.minPrice : 10,
+      allowedVehicleTypes: Array.isArray(rawFilters.allowedVehicleTypes)
+        ? (rawFilters.allowedVehicleTypes as string[])
+        : [],
+      ...(typeof rawFilters.maxPrice === 'number' && { maxPrice: rawFilters.maxPrice }),
+      ...(typeof rawFilters.minHoursFromNow === 'number' && {
+        minHoursFromNow: rawFilters.minHoursFromNow,
+      }),
+    };
+
+    const supabase = getSupabase();
+    const rideSync = new RideSyncService(supabase, bot.id);
+    await rideSync.sync(api);
+    rideSyncInterval = setInterval(() => {
+      rideSync.sync(api).catch(() => {});
+    }, RIDE_SYNC_INTERVAL_MS);
+
+    logger.info(`${prefix()} Sniper started (Stop = dashboard).`);
+    const timezoneId = bot.timezone?.trim() || undefined;
+    const sniper = new SniperLoop(api, filters, botState, email, bot.id, timezoneId);
+    instances.set(email, sniper);
+
+    await sniper.start();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`${prefix()} Error:`, { err: message });
+    try {
+      const botState = new BotStateService(email);
+      await botState.updateStatus('ERROR_AUTH');
+    } catch {
+      /* ignore */
+    }
+  } finally {
+    if (rideSyncInterval != null) clearInterval(rideSyncInterval);
+    pendingStarts.delete(email);
+    instances.delete(email);
+    logger.info(`${prefix()} Sniper stopped.`);
+  }
+}
+
+/** Bot IDs that were RUNNING in the previous sync. Used to only start when status actually changed to RUNNING (user turned ON). */
+let prevRunningBotIds = new Set<string>();
+
+async function syncFleet(
+  instances: Map<string, SniperLoop>,
+  pendingStarts: Set<string>
+): Promise<void> {
+  const active = await fetchActiveBots();
+  const activeEmails = new Set(active.map((b) => b.email));
+  const activeIds = new Set(active.map((b) => b.id));
+
+  for (const [email, sniper] of instances) {
+    if (!activeEmails.has(email)) {
+      logger.info(`[${email}] Stopping (no longer RUNNING in DB).`);
+      sniper.stop();
+    }
+  }
+
+  for (const bot of active) {
+    const alreadyRunning = instances.has(bot.email) || pendingStarts.has(bot.email);
+    const wasAlreadyRunningLastSync = prevRunningBotIds.has(bot.id);
+    if (!alreadyRunning && !wasAlreadyRunningLastSync) {
+      logger.info(`[${bot.email}] Starting sniper (status changed to RUNNING).`);
+      runBotInstance(bot, instances, pendingStarts);
+    }
+  }
+
+  prevRunningBotIds = activeIds;
+}
+
+async function runFleet(): Promise<void> {
+  const instances = new Map<string, SniperLoop>();
+  const pendingStarts = new Set<string>();
 
   const shutdown = (): void => {
-    console.log('\n[BOT] Ctrl+C → STOPPED, exit.');
-    botState
-      .updateStatus('STOPPED')
-      .catch((err) => logger.error('Failed to update status on shutdown', { err }))
-      .finally(() => process.exit(0));
+    logger.info('Fleet: Shutting down, stopping all bots...');
+    for (const [email, sniper] of instances) {
+      sniper.stop();
+      logger.info(`[${email}] Stop requested.`);
+    }
+    process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  try {
-    console.log('\n[BOT] Blacklane Sniper (simulation). Démarrez le bot, puis Start dans l’admin.\n');
-    await botState.initialize();
+  logger.info('Fleet Manager started. Watching for RUNNING bots every 10s.');
+  await syncFleet(instances, pendingStarts);
 
-    for (;;) {
-      const status = await botState.getStatus();
-
-      if (status !== 'RUNNING') {
-        console.log(`[BOT] Statut: ${status} (attente ${POLL_INTERVAL_MS / 1000}s)`);
-        await sleep(POLL_INTERVAL_MS);
-        continue;
-      }
-
-      console.log('[BOT] RUNNING → lancement session.\n');
-      try {
-        await runSniperSession(email, password, botState);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error('[BOT] Erreur:', message);
-        await botState.updateStatus('ERROR_AUTH').catch(() => {});
-      }
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('[BOT] Fatal:', message);
-    process.exit(1);
-  }
+  setInterval(() => {
+    syncFleet(instances, pendingStarts);
+  }, WATCHDOG_INTERVAL_MS);
 }
 
-main();
+runFleet().catch((err) => {
+  logger.error('Fleet Manager fatal:', { err: err instanceof Error ? err.message : String(err) });
+  process.exit(1);
+});

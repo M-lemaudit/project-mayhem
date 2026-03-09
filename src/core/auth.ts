@@ -17,11 +17,55 @@ const LOGIN_TIMEOUT_MS = 60_000;
 /** Time to wait for a request with Authorization: Bearer after clicking login. */
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 
+/** French chauffeur laptop: Europe/Paris timezone, fr-FR locale. */
+const BROWSER_TIMEZONE_ID = 'Europe/Paris';
+const BROWSER_LOCALE = 'fr-FR';
+
+/** Consistent Chrome on Windows 10/11 User-Agent (avoids headless/bot detection). */
+const CHROME_WINDOWS_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
 /** URL pattern for Blacklane auth API (token visible in Network tab). */
 const ATHENA_HOST = 'athena.blacklane.com';
 const BEARER_PREFIX = 'Bearer ';
 /** Fallback Accept when browser does not send it in the captured request. */
 const DEFAULT_ACCEPT = 'application/vnd.blacklane.v2+json';
+
+function getPlaywrightProxyFromEnv():
+  | {
+      server: string;
+      username?: string;
+      password?: string;
+    }
+  | undefined {
+  const raw = process.env.PROXY_URL?.trim();
+  if (!raw) return undefined;
+
+  try {
+    const url = new URL(raw);
+    if (!url.hostname) return undefined;
+
+    const port =
+      url.port || (url.protocol === 'https:' ? '443' : '80');
+    const server = `http://${url.hostname}:${port}`;
+
+    const username = url.username ? decodeURIComponent(url.username) : '';
+    const password = url.password ? decodeURIComponent(url.password) : '';
+
+    logger.debug('[NETWORK] Using proxy for Playwright login', { server });
+
+    return {
+      server,
+      ...(username && { username }),
+      ...(password && { password }),
+    };
+  } catch (error) {
+    logger.warn('Failed to parse PROXY_URL for Playwright. Proceeding without proxy.', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
 
 /** Serializable cookie shape for storage and reuse in API client. */
 export interface AuthCookie {
@@ -136,29 +180,48 @@ function savedSessionToAuthResult(saved: SavedSession): AuthResult {
   };
 }
 
+/** Optional browser fingerprint overrides (from bot config in DB). */
+export interface AuthBrowserOptions {
+  /** IANA timezone (e.g. Europe/Paris, America/New_York). */
+  timezoneId?: string;
+  /** Locale (e.g. fr-FR, en-US). */
+  locale?: string;
+}
+
 /**
  * Log in to Blacklane partner portal and return access token + cookies.
+ * Credentials come only from arguments (Fleet Manager passes per-bot email/password from DB).
  * Step A: If savedSession has accessToken AND cookies → return immediately (no browser).
- * Step B: Otherwise, fallback to Playwright browser login.
+ * Step B: Otherwise, fallback to Playwright browser login with email + password.
  * Step C: Returns { accessToken, cookies, userAgent, acceptHeader }.
+ * @param browserOptions - Optional timezone/locale from bot (Stealth Settings). Defaults: Europe/Paris, fr-FR.
  */
 export async function loginAndGetToken(
   email: string,
   password: string,
-  savedSession?: unknown
+  savedSession?: unknown,
+  browserOptions?: AuthBrowserOptions
 ): Promise<AuthResult> {
   if (isSavedSessionUsable(savedSession)) {
     return savedSessionToAuthResult(savedSession);
   }
 
+  const timezoneId =
+    browserOptions?.timezoneId?.trim() || BROWSER_TIMEZONE_ID;
+  const locale = browserOptions?.locale?.trim() || BROWSER_LOCALE;
+
+  const proxy = getPlaywrightProxyFromEnv();
   const browser = await chromium.launch({
     headless: false,
     args: ['--disable-blink-features=AutomationControlled'],
+    ...(proxy && { proxy }),
   });
 
   try {
     const context = await browser.newContext({
-      userAgent: undefined,
+      userAgent: CHROME_WINDOWS_USER_AGENT,
+      locale,
+      timezoneId,
       viewport: { width: 1280, height: 800 },
       ignoreHTTPSErrors: false,
     });

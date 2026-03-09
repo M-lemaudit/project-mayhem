@@ -20,6 +20,23 @@ interface AddClientDialogProps {
 
 const VEHICLE_OPTIONS = ['business', 'first', 'economy', 'minivan', 'minibus', 'sprinter'];
 
+const TIMEZONE_OPTIONS = [
+  { value: 'America/New_York', label: 'America/New York' },
+  { value: 'Europe/Paris', label: 'Europe/Paris' },
+  { value: 'Europe/London', label: 'Europe/London' },
+  { value: 'Asia/Dubai', label: 'Asia/Dubai' },
+];
+
+const LOCALE_OPTIONS = [
+  { value: 'en-US', label: 'en-US' },
+  { value: 'fr-FR', label: 'fr-FR' },
+  { value: 'en-GB', label: 'en-GB' },
+  { value: 'de-DE', label: 'de-DE' },
+];
+
+const DEFAULT_LAT = '25.7617';
+const DEFAULT_LONG = '-80.1918';
+
 export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDialogProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -27,6 +44,10 @@ export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDial
   const [minPrice, setMinPrice] = useState('50');
   const [minHoursFromNow, setMinHoursFromNow] = useState('');
   const [vehicleTypes, setVehicleTypes] = useState<string[]>([]);
+  const [timezone, setTimezone] = useState('America/New_York');
+  const [locale, setLocale] = useState('en-US');
+  const [latitude, setLatitude] = useState(DEFAULT_LAT);
+  const [longitude, setLongitude] = useState(DEFAULT_LONG);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -48,6 +69,10 @@ export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDial
         minPrice: parseFloat(minPrice) || 0,
         minHoursFromNow: minHoursFromNow ? parseInt(minHoursFromNow, 10) : undefined,
         vehicleTypes,
+        timezone: timezone.trim(),
+        locale: locale.trim(),
+        latitude: parseFloat(latitude) ?? 25.7617,
+        longitude: parseFloat(longitude) ?? -80.1918,
       });
       if (result.error) {
         setError(result.error);
@@ -59,6 +84,10 @@ export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDial
       setMinPrice('50');
       setMinHoursFromNow('');
       setVehicleTypes([]);
+      setTimezone('America/New_York');
+      setLocale('en-US');
+      setLatitude(DEFAULT_LAT);
+      setLongitude(DEFAULT_LONG);
       onOpenChange(false);
       onSuccess();
     } catch (err) {
@@ -74,7 +103,8 @@ export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDial
         <DialogHeader>
           <DialogTitle>Add Client</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto">
           <div>
             <label className="block text-sm text-zinc-400 mb-1.5">Client Name</label>
             <Input
@@ -147,8 +177,67 @@ export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDial
               ))}
             </div>
           </div>
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          <DialogFooter>
+
+          <details className="rounded-lg border border-zinc-700 bg-zinc-900/50 overflow-hidden">
+            <summary className="px-4 py-3 text-sm font-medium text-zinc-300 cursor-pointer hover:bg-zinc-800/50">
+              Stealth Settings
+            </summary>
+            <div className="px-4 pb-4 pt-1 space-y-4 border-t border-zinc-700">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1.5">Timezone</label>
+                <select
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                >
+                  {TIMEZONE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1.5">Locale</label>
+                <select
+                  value={locale}
+                  onChange={(e) => setLocale(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                >
+                  {LOCALE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1.5">Location (Latitude / Longitude)</label>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    step="any"
+                    value={latitude}
+                    onChange={(e) => setLatitude(e.target.value)}
+                    placeholder="25.7617"
+                  />
+                  <Input
+                    type="number"
+                    step="any"
+                    value={longitude}
+                    onChange={(e) => setLongitude(e.target.value)}
+                    placeholder="-80.1918"
+                  />
+                </div>
+                <p className="text-xs text-zinc-500 mt-1">
+                  Use latlong.net to find coordinates.
+                </p>
+              </div>
+            </div>
+          </details>
+          </div>
+          {error && <p className="mt-2 shrink-0 text-sm text-red-400">{error}</p>}
+          <DialogFooter className="shrink-0">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>

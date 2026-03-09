@@ -3,10 +3,17 @@
  * Supabase client singleton lives in config/supabase.ts.
  */
 
-export { BlacklaneApi, TokenExpiredError, RateLimitError } from './blacklane-api';
+export {
+  BlacklaneApi,
+  TokenExpiredError,
+  RateLimitError,
+  type UpcomingBooking,
+  type PlannedRide,
+} from './blacklane-api';
 export {
   BotStateService,
   type BotConfig,
   type BotRow,
   type BotStatus,
 } from './bot-state';
+export { RideSyncService } from './ride-sync';

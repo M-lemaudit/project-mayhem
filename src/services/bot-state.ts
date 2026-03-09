@@ -7,11 +7,13 @@
 import { getSupabase } from '../config/supabase';
 import { logger } from '../utils';
 
-export type BotStatus = 'RUNNING' | 'STOPPED' | 'ERROR_AUTH' | 'PAUSED_RATE_LIMIT';
+export type BotStatus = 'RUNNING' | 'STOPPED' | 'ERROR_AUTH' | 'PAUSED_RATE_LIMIT' | 'SLEEPING';
 
 export interface BotRow {
   id: string;
   email: string;
+  /** Blacklane internal user id used for authenticated API actions (e.g. accept offer). */
+  blacklane_user_id?: string | null;
   status: BotStatus;
   filters: Record<string, unknown>;
   session: Record<string, unknown>;
@@ -23,6 +25,8 @@ export interface BotConfig {
   status: BotStatus;
   filters: Record<string, unknown>;
   session: Record<string, unknown>;
+  /** Blacklane internal user id used for authenticated API actions (e.g. accept offer). */
+  blacklaneUserId?: string | null;
 }
 
 export class BotStateService {
@@ -37,7 +41,7 @@ export class BotStateService {
 
     const { data: existing, error: fetchError } = await supabase
       .from('bots')
-      .select('id, status, filters, session')
+      .select('id, status, filters, session, blacklane_user_id')
       .eq('email', this.email)
       .maybeSingle();
 
@@ -50,6 +54,10 @@ export class BotStateService {
         status: (existing.status as BotStatus) ?? 'STOPPED',
         filters: (existing.filters as Record<string, unknown>) ?? {},
         session: (existing.session as Record<string, unknown>) ?? {},
+        blacklaneUserId:
+          (existing as BotRow).blacklane_user_id != null
+            ? String((existing as BotRow).blacklane_user_id)
+            : undefined,
       };
     }
 
@@ -62,7 +70,7 @@ export class BotStateService {
         filters: defaultFilters,
         session: {},
       })
-      .select('id, status, filters, session')
+      .select('id, status, filters, session, blacklane_user_id')
       .single();
 
     if (insertError) {
@@ -74,6 +82,10 @@ export class BotStateService {
       status: (inserted.status as BotStatus) ?? 'STOPPED',
       filters: (inserted.filters as Record<string, unknown>) ?? {},
       session: (inserted.session as Record<string, unknown>) ?? {},
+      blacklaneUserId:
+        (inserted as BotRow).blacklane_user_id != null
+          ? String((inserted as BotRow).blacklane_user_id)
+          : undefined,
     };
   }
 
@@ -92,7 +104,7 @@ export class BotStateService {
     if (error) {
       throw new Error(`BotStateService.saveSession: ${error.message}`);
     }
-    logger.info('💾 Session saved to Supabase');
+    logger.info(`[${this.email}] 💾 Session saved to Supabase`);
   }
 
   /** Returns the stored session JSON. */
@@ -142,24 +154,31 @@ export class BotStateService {
     }
   }
 
-  /** Records a matching offer so the admin can show a popup (simulation mode). */
-  async reportMatch(offerId: string, price: string | number): Promise<void> {
+  /** Records a matching offer so the admin can show a notification (simulation mode). */
+  async reportMatch(
+    offerId: string,
+    price: string | number,
+    pickupAt?: string
+  ): Promise<void> {
     const supabase = getSupabase();
+
+    const lastMatch: Record<string, unknown> = {
+      at: new Date().toISOString(),
+      offer_id: offerId,
+      price: typeof price === 'number' ? price : String(price),
+    };
+    if (pickupAt) lastMatch.pickup_at = pickupAt;
 
     const { error } = await supabase
       .from('bots')
       .update({
-        last_match: {
-          at: new Date().toISOString(),
-          offer_id: offerId,
-          price: typeof price === 'number' ? price : String(price),
-        },
+        last_match: lastMatch,
         last_seen: new Date().toISOString(),
       })
       .eq('email', this.email);
 
     if (error) {
-      logger.warn('BotStateService.reportMatch failed:', error.message);
+      logger.warn(`[${this.email}] reportMatch failed:`, error.message);
     }
   }
 

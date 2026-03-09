@@ -31,3 +31,27 @@ body {
   color: hsl(var(--foreground));
   min-height: 100vh;
 }
+
+/* Scrollbar: dark theme (Chrome, Safari, Edge) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(82 82 91) rgb(39 39 42);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgb(39 39 42); /* zinc-800 */
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(82 82 91); /* zinc-600 */
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(113 113 122); /* zinc-500 */
+}

@@ -25,7 +25,12 @@ async function main(): Promise<void> {
 
   try {
     const { accessToken, cookies, userAgent } = await loginAndGetToken(email, password);
-    const api = new BlacklaneApi(accessToken, cookies, userAgent);
+    const api = new BlacklaneApi(
+      accessToken,
+      cookies,
+      userAgent,
+      process.env.BLACKLANE_USER_ID ?? ''
+    );
 
     const filters: BotFilters = {
       minPrice: 0,
