@@ -6,7 +6,7 @@
 import type { BlacklaneApi, BotStateService } from '../services';
 import { RateLimitError, TokenExpiredError } from '../services';
 import { getGlobalSettings } from '../config/global-settings';
-import { FilterEngine, getOfferPrice, type BotFilters, type ExistingRide, type IncludedResource, type OfferShape } from './filter-engine';
+import { FilterEngine, getOfferPrice, resolveOfferLocations, type BotFilters, type ExistingRide, type IncludedResource, type OfferShape } from './filter-engine';
 import { getSupabase } from '../config/supabase';
 import { logger } from '../utils';
 
@@ -358,6 +358,30 @@ export class SniperLoop {
                     .catch(() => {});
                 }
                 await this.api.acceptOffer(offer);
+                if (this.botId) {
+                  try {
+                    const { pickup, dropoff } = resolveOfferLocations(offer, included);
+                    const pickupAddr = (pickup?.attributes as Record<string, unknown> | undefined)?.formatted_address_en;
+                    const dropoffAddr = (dropoff?.attributes as Record<string, unknown> | undefined)?.formatted_address_en;
+                    await getSupabase()
+                      .from('accepted_offers')
+                      .upsert(
+                        {
+                          bot_id: this.botId,
+                          offer_id: idStr,
+                          price: String(price),
+                          pickup_at: pickupAt || null,
+                          pickup_address: typeof pickupAddr === 'string' ? pickupAddr : null,
+                          dropoff_address: typeof dropoffAddr === 'string' ? dropoffAddr : null,
+                        },
+                        { onConflict: 'bot_id,offer_id' }
+                      );
+                  } catch (err) {
+                    logger.warn('Failed to log accepted offer to Supabase', {
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  }
+                }
                 const rideDateTime = formatRideDateTime(pickupAt, this.timezoneId);
                 console.log(`${this.logPrefix} 🎯 Offer ${idStr} handled. Course: ${rideDateTime}. Entering cooldown before next scan...`);
                 hadMatchThisCycle = true;

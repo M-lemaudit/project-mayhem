@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { supabase, type BotRow } from '@/lib/supabase';
 import Link from 'next/link';
 import { updateClient, toggleClientStatus } from '@/app/actions/bots';
+import { LiveSnipeLog } from '@/components/live-snipe-log';
 
 interface AccountPageProps {
   params: { id: string };
@@ -344,6 +345,11 @@ export default function AccountPage({ params }: AccountPageProps) {
                 </p>
               </div>
             </section>
+
+            {/* Bot-specific live log */}
+            <div className="mb-10">
+              <LiveSnipeLog mode="bot" botId={id} />
+            </div>
 
             <div className="grid grid-cols-1 gap-8 items-start">
               <div className="lg:col-span-12 flex flex-col gap-8">

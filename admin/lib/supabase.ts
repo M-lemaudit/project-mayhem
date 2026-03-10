@@ -33,3 +33,29 @@ export interface BotRow {
   /** Longitude for geo */
   longitude?: number | null;
 }
+
+export interface RideRow {
+  id: string;
+  bot_id: string;
+  start_at: string;
+  end_at: string;
+  status?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  pickup?: string | null;
+  dropoff?: string | null;
+  pickup_address?: string | null;
+  dropoff_address?: string | null;
+}
+
+/** One row per accepted offer (dashboard Live Snipe Log). */
+export interface AcceptedOfferRow {
+  id: string;
+  bot_id: string;
+  offer_id: string;
+  price?: string | null;
+  pickup_at?: string | null;
+  pickup_address?: string | null;
+  dropoff_address?: string | null;
+  created_at: string;
+}

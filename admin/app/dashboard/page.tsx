@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, type BotRow } from '@/lib/supabase';
 import { addClient } from '@/app/actions/bots';
+import { LiveSnipeLog } from '@/components/live-snipe-log';
 
 interface NetworkAccount {
   id: string;
@@ -130,6 +131,14 @@ export default function DashboardPage() {
 
   const activeBots = bots.filter((b) => b.status === 'RUNNING').length;
   const accounts: NetworkAccount[] = bots.map(mapBotToAccount);
+  const botsById = useMemo(
+    () =>
+      bots.reduce<Record<string, BotRow>>((acc, bot) => {
+        acc[bot.id] = bot;
+        return acc;
+      }, {}),
+    [bots]
+  );
 
   if (loading) {
     return (
@@ -380,6 +389,9 @@ export default function DashboardPage() {
             </button>
           </div>
         </section>
+
+        {/* Live Snipe Log (global) */}
+        <LiveSnipeLog mode="global" botsById={botsById} />
       </main>
 
       {/* Add Account Modal */}

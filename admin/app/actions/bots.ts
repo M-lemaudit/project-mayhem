@@ -47,11 +47,12 @@ function isValidLongitude(n: unknown): n is number {
 
 export async function addClient(input: AddClientInput) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) {
     return { error: 'Not authenticated' };
   }
-
   if (!isNonEmptyString(input.timezone)) {
     return { error: 'Timezone is required' };
   }
@@ -104,7 +105,9 @@ export async function updateClient(
   input: UpdateClientInput
 ) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) {
     return { error: 'Not authenticated' };
   }
@@ -194,7 +197,9 @@ export async function updateClient(
 
 export async function deleteClient(id: string) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) {
     return { error: 'Not authenticated' };
   }
@@ -207,7 +212,9 @@ export async function deleteClient(id: string) {
 
 export async function toggleClientStatus(id: string, currentStatus: string) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) {
     return { error: 'Not authenticated' };
   }
