@@ -212,7 +212,7 @@ export async function loginAndGetToken(
 
   const proxy = getPlaywrightProxyFromEnv();
   const browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: ['--disable-blink-features=AutomationControlled'],
     ...(proxy && { proxy }),
   });
