@@ -5,7 +5,7 @@
  */
 
 import 'dotenv/config';
-import { loginAndGetToken } from './core/auth';
+import { loginAndGetToken, discoverBlacklaneUserId } from './core/auth';
 import { SniperLoop, type BotFilters } from './core';
 import { BlacklaneApi, BotStateService, RideSyncService } from './services';
 import { logger } from './utils';
@@ -91,9 +91,23 @@ async function runBotInstance(
       ...(session.xDeviceId && { xDeviceId: session.xDeviceId }),
     });
 
-    const blacklaneUserId = bot.blacklane_user_id;
+    let blacklaneUserId = bot.blacklane_user_id;
+
     if (!blacklaneUserId) {
-      throw new Error('blacklane_user_id is missing for bot ' + email);
+      const discoveredId = await discoverBlacklaneUserId(session.accessToken, session.acceptHeader);
+      if (discoveredId) {
+        blacklaneUserId = discoveredId;
+        logger.info(`[AUTH] Auto-discovered Blacklane User ID: ${discoveredId}. Updating database...`);
+        const supabase = getSupabase();
+        await supabase
+          .from('bots')
+          .update({ blacklane_user_id: discoveredId })
+          .eq('id', bot.id);
+      }
+    }
+
+    if (!blacklaneUserId) {
+      throw new Error('blacklane_user_id is missing for bot ' + email + ' and auto-discovery failed.');
     }
 
     const api = new BlacklaneApi(session.accessToken, session.cookies, session.userAgent, blacklaneUserId);

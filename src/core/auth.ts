@@ -310,3 +310,31 @@ export async function loginAndGetToken(
     logger.debug('Browser closed');
   }
 }
+
+/**
+ * Automatically fetch the Blacklane User ID using the acquired session token.
+ * This calls the /hades/users/me endpoint and extracts the `id`.
+ */
+export async function discoverBlacklaneUserId(
+  accessToken: string,
+  acceptHeader: string
+): Promise<string | undefined> {
+  try {
+    const response = await fetch('https://athena.blacklane.com/hades/users/me', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: acceptHeader,
+      },
+    });
+    if (!response.ok) return undefined;
+    const data = await response.json() as Record<string, unknown>;
+    const id = (data?.data as Record<string, unknown>)?.id;
+    if (typeof id === 'string' && id) {
+      return id;
+    }
+  } catch (err) {
+    logger.warn('[AUTH] Error during auto-discovery of User ID', { error: err instanceof Error ? err.message : String(err) });
+    return undefined;
+  }
+  return undefined;
+}
