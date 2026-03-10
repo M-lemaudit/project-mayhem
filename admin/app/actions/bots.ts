@@ -68,7 +68,10 @@ export async function addClient(input: AddClientInput) {
   const encryptedPassword = encrypt(input.password);
   const filters: Record<string, unknown> = {
     minPrice: input.minPrice,
-    allowedVehicleTypes: input.vehicleTypes.filter(Boolean),
+    allowedVehicleTypes: input.vehicleTypes
+      .filter(Boolean)
+      .map((v) => v.trim().toLowerCase())
+      .filter((v, idx, arr) => arr.indexOf(v) === idx),
   };
   if (typeof input.minHoursFromNow === 'number' && input.minHoursFromNow > 0) {
     filters.minHoursFromNow = input.minHoursFromNow;
@@ -163,7 +166,10 @@ export async function updateClient(
       }
     }
     if (input.vehicleTypes !== undefined) {
-      filters.allowedVehicleTypes = input.vehicleTypes.filter(Boolean);
+      filters.allowedVehicleTypes = input.vehicleTypes
+        .filter(Boolean)
+        .map((v) => v.trim().toLowerCase())
+        .filter((v, idx, arr) => arr.indexOf(v) === idx);
     }
     updates.filters = filters;
   }
