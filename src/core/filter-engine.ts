@@ -3,6 +3,12 @@
  * New location-based filters use the JSON:API `included` array for pickup/dropoff resolution.
  */
 
+import { logger } from '../utils';
+
+const FILTER_TRACE_ENABLED = process.env.FILTER_TRACE === 'true';
+const FILTER_TRACE_FULL_EVAL =
+  FILTER_TRACE_ENABLED && process.env.FILTER_TRACE_FULL_EVAL === 'true';
+
 export interface BotFilters {
   minPrice: number;
   /** Optional max price (offers above this are skipped). */
@@ -50,6 +56,82 @@ export interface IncludedResource {
   id: string;
   type: string;
   attributes?: Record<string, unknown>;
+}
+
+// ── Trace helpers (debug only, gated by env flags) ────────────────────────────
+
+function valueType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (value instanceof Date) return 'date';
+  return typeof value;
+}
+
+function safeValue(value: unknown): unknown {
+  if (
+    value == null ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    const sample = value.slice(0, 3);
+    return { length: value.length, sample };
+  }
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    const sample: Record<string, unknown> = {};
+    for (const key of keys.slice(0, 5)) {
+      sample[key] = obj[key];
+    }
+    return { keys, sample };
+  }
+  return String(value);
+}
+
+interface TraceParams {
+  offerId: string;
+  filterName: string;
+  op: string;
+  leftLabel: string;
+  leftValue: unknown;
+  rightLabel?: string;
+  rightValue?: unknown;
+  passed: boolean;
+}
+
+function traceCompare(params: TraceParams): void {
+  if (!FILTER_TRACE_ENABLED) return;
+  const { offerId, filterName, op, leftLabel, leftValue, rightLabel, rightValue, passed } =
+    params;
+
+  const payload: Record<string, unknown> = {
+    offerId,
+    filter: filterName,
+    op,
+    result: passed ? 'PASS' : 'FAIL',
+    left: {
+      label: leftLabel,
+      type: valueType(leftValue),
+      value: safeValue(leftValue),
+    },
+  };
+
+  if (rightLabel !== undefined) {
+    payload.right = {
+      label: rightLabel,
+      type: valueType(rightValue),
+      value: safeValue(rightValue),
+    };
+  }
+
+  logger.info('[FILTER_TRACE]', payload);
 }
 
 // ── JSON:API helpers ───────────────────────────────────────────────
@@ -226,6 +308,27 @@ export class FilterEngine {
     existingRides: ExistingRide[] = [],
     included: IncludedResource[] = []
   ): MatchResult {
+    const offerIdRaw = (offer as Record<string, unknown>)?.id;
+    const offerId = offerIdRaw != null ? String(offerIdRaw) : 'unknown';
+    const useFullEval = FILTER_TRACE_FULL_EVAL;
+    const failures: string[] = [];
+
+    const fail = (filterName: string, reason: string, traceDetails?: Omit<TraceParams, 'offerId' | 'filterName' | 'passed'>): MatchResult | null => {
+      if (traceDetails) {
+        traceCompare({
+          offerId,
+          filterName,
+          passed: false,
+          ...traceDetails,
+        });
+      }
+      if (useFullEval) {
+        failures.push(reason);
+        return null;
+      }
+      return reject(reason);
+    };
+
     const price = getOfferPrice(offer);
     const attrs = offer?.attributes as Record<string, unknown> | undefined;
     const vehicleType = (attrs?.service_class ?? offer?.vehicle_type) as string | undefined;
@@ -233,34 +336,137 @@ export class FilterEngine {
 
     // ── Price ─────────────────────────────────────────────────────
     if (price == null) {
-      return reject('Missing price');
-    }
-    if (price < filters.minPrice) {
-      return reject(`Price too low (${price} < min ${filters.minPrice})`);
-    }
-    if (typeof filters.maxPrice === 'number' && price > filters.maxPrice) {
-      return reject(`Price too high (${price} > max ${filters.maxPrice})`);
+      const res = fail('price_present', 'Missing price', {
+        op: '!= null',
+        leftLabel: 'price',
+        leftValue: price,
+        rightLabel: 'required',
+        rightValue: true,
+      });
+      if (res) return res;
+    } else {
+      traceCompare({
+        offerId,
+        filterName: 'price_present',
+        op: '!= null',
+        leftLabel: 'price',
+        leftValue: price,
+        rightLabel: 'required',
+        rightValue: true,
+        passed: true,
+      });
+      if (price < filters.minPrice) {
+        const res = fail('minPrice', `Price too low (${price} < min ${filters.minPrice})`, {
+          op: '>=',
+          leftLabel: 'price',
+          leftValue: price,
+          rightLabel: 'minPrice',
+          rightValue: filters.minPrice,
+        });
+        if (res) return res;
+      } else {
+        traceCompare({
+          offerId,
+          filterName: 'minPrice',
+          op: '>=',
+          leftLabel: 'price',
+          leftValue: price,
+          rightLabel: 'minPrice',
+          rightValue: filters.minPrice,
+          passed: true,
+        });
+      }
+      if (typeof filters.maxPrice === 'number') {
+        const passedMax = price <= filters.maxPrice;
+        traceCompare({
+          offerId,
+          filterName: 'maxPrice',
+          op: '<=',
+          leftLabel: 'price',
+          leftValue: price,
+          rightLabel: 'maxPrice',
+          rightValue: filters.maxPrice,
+          passed: passedMax,
+        });
+        if (!passedMax) {
+          const res = fail(
+            'maxPrice',
+            `Price too high (${price} > max ${filters.maxPrice})`,
+            {
+              op: '<=',
+              leftLabel: 'price',
+              leftValue: price,
+              rightLabel: 'maxPrice',
+              rightValue: filters.maxPrice,
+            }
+          );
+          if (res) return res;
+        }
+      }
     }
 
     // ── Vehicle type ──────────────────────────────────────────────
     const allowed = filters.allowedVehicleTypes ?? [];
     if (allowed.length > 0 && typeStr) {
       const allowedLower = allowed.map((v) => v.toLowerCase());
-      if (!allowedLower.includes(typeStr)) {
-        return reject(`Vehicle type '${typeStr}' not in allowed list [${allowed.join(', ')}]`);
+      const passedVehicle = allowedLower.includes(typeStr);
+      traceCompare({
+        offerId,
+        filterName: 'vehicleType',
+        op: 'includes',
+        leftLabel: 'vehicleType',
+        leftValue: typeStr,
+        rightLabel: 'allowedVehicleTypes',
+        rightValue: allowed,
+        passed: passedVehicle,
+      });
+      if (!passedVehicle) {
+        const res = fail(
+          'vehicleType',
+          `Vehicle type '${typeStr}' not in allowed list [${allowed.join(', ')}]`,
+          {
+            op: 'includes',
+            leftLabel: 'vehicleType',
+            leftValue: typeStr,
+            rightLabel: 'allowedVehicleTypes',
+            rightValue: allowed,
+          }
+        );
+        if (res) return res;
       }
     }
 
     // ── Ride type (transfer / hourly / both) ─────────────────────
     const rideType = filters.rideType?.trim().toLowerCase();
     if (rideType && rideType !== 'both') {
-      const bookingType = (typeof attrs?.booking_type === 'string'
-        ? attrs.booking_type.trim().toLowerCase()
-        : '');
-      if (bookingType && bookingType !== rideType) {
-        return reject(
-          `Booking type '${bookingType}' not allowed (user only accepts '${rideType}')`
+      const bookingType =
+        typeof attrs?.booking_type === 'string'
+          ? attrs.booking_type.trim().toLowerCase()
+          : '';
+      const passedRideType = !bookingType || bookingType === rideType;
+      traceCompare({
+        offerId,
+        filterName: 'rideType',
+        op: '== or empty',
+        leftLabel: 'booking_type',
+        leftValue: bookingType,
+        rightLabel: 'rideType',
+        rightValue: rideType,
+        passed: passedRideType,
+      });
+      if (!passedRideType) {
+        const res = fail(
+          'rideType',
+          `Booking type '${bookingType}' not allowed (user only accepts '${rideType}')`,
+          {
+            op: '==',
+            leftLabel: 'booking_type',
+            leftValue: bookingType,
+            rightLabel: 'rideType',
+            rightValue: rideType,
+          }
         );
+        if (res) return res;
       }
     }
 
@@ -270,14 +476,56 @@ export class FilterEngine {
     if (typeof minHours === 'number' && minHours > 0) {
       const nowUtc = Date.now();
       if (offerStart == null) {
-        return reject('Missing starts_at');
-      }
-      const msDiff = offerStart.getTime() - nowUtc;
-      const hoursFromNow = msDiff / (3600 * 1000);
-      if (hoursFromNow < minHours) {
-        return reject(
-          `Too soon (starts in ${hoursFromNow.toFixed(1)}h, min ${minHours}h)`
+        const res = fail(
+          'minHoursFromNow_start',
+          'Missing starts_at',
+          {
+            op: '!= null',
+            leftLabel: 'offerStart',
+            leftValue: offerStart,
+            rightLabel: 'required',
+            rightValue: true,
+          }
         );
+        if (res) return res;
+      } else {
+        traceCompare({
+          offerId,
+          filterName: 'minHoursFromNow_start',
+          op: '!= null',
+          leftLabel: 'offerStart',
+          leftValue: offerStart,
+          rightLabel: 'required',
+          rightValue: true,
+          passed: true,
+        });
+        const msDiff = offerStart.getTime() - nowUtc;
+        const hoursFromNow = msDiff / (3600 * 1000);
+        const passedLead = hoursFromNow >= minHours;
+        traceCompare({
+          offerId,
+          filterName: 'minHoursFromNow',
+          op: '>=',
+          leftLabel: 'hoursFromNow',
+          leftValue: hoursFromNow,
+          rightLabel: 'minHoursFromNow',
+          rightValue: minHours,
+          passed: passedLead,
+        });
+        if (!passedLead) {
+          const res = fail(
+            'minHoursFromNow',
+            `Too soon (starts in ${hoursFromNow.toFixed(1)}h, min ${minHours}h)`,
+            {
+              op: '>=',
+              leftLabel: 'hoursFromNow',
+              leftValue: hoursFromNow,
+              rightLabel: 'minHoursFromNow',
+              rightValue: minHours,
+            }
+          );
+          if (res) return res;
+        }
       }
     }
 
@@ -285,15 +533,58 @@ export class FilterEngine {
     const minGap = filters.minGapMinutes;
     if (typeof minGap === 'number' && minGap > 0 && existingRides.length > 0) {
       if (offerStart == null) {
-        return reject('Missing starts_at (required for gap check)');
-      }
-      const offerEnd = getOfferEndDate(offer, offerStart);
-      if (offerEnd == null) {
-        return reject('Missing end time (required for gap check)');
-      }
-      const gapMs = minGap * 60 * 1000;
-      if (checkTimeGap(offerStart, offerEnd, gapMs, existingRides)) {
-        return reject('Schedule Conflict');
+        const res = fail(
+          'timeGap_start',
+          'Missing starts_at (required for gap check)',
+          {
+            op: '!= null',
+            leftLabel: 'offerStart',
+            leftValue: offerStart,
+            rightLabel: 'required',
+            rightValue: true,
+          }
+        );
+        if (res) return res;
+      } else {
+        const offerEnd = getOfferEndDate(offer, offerStart);
+        if (offerEnd == null) {
+          const res = fail(
+            'timeGap_end',
+            'Missing end time (required for gap check)',
+            {
+              op: '!= null',
+              leftLabel: 'offerEnd',
+              leftValue: offerEnd,
+              rightLabel: 'required',
+              rightValue: true,
+            }
+          );
+          if (res) return res;
+        } else {
+          const gapMs = minGap * 60 * 1000;
+          const hasConflict = checkTimeGap(offerStart, offerEnd, gapMs, existingRides);
+          const passedGap = !hasConflict;
+          traceCompare({
+            offerId,
+            filterName: 'timeGap',
+            op: 'no-conflict',
+            leftLabel: 'hasConflict',
+            leftValue: hasConflict,
+            rightLabel: 'expected',
+            rightValue: false,
+            passed: passedGap,
+          });
+          if (!passedGap) {
+            const res = fail('timeGap', 'Schedule Conflict', {
+              op: 'no-conflict',
+              leftLabel: 'hasConflict',
+              leftValue: hasConflict,
+              rightLabel: 'expected',
+              rightValue: false,
+            });
+            if (res) return res;
+          }
+        }
       }
     }
 
@@ -308,14 +599,33 @@ export class FilterEngine {
       const dropoffIata = getIata(dropoff);
 
       const matchesIata =
-        (pickupIata && codesLower.includes(pickupIata)) ||
-        (dropoffIata && codesLower.includes(dropoffIata));
+        (!!pickupIata && codesLower.includes(pickupIata)) ||
+        (!!dropoffIata && codesLower.includes(dropoffIata));
+
+      traceCompare({
+        offerId,
+        filterName: 'airportIata',
+        op: 'includes',
+        leftLabel: 'pickup/dropoff IATA',
+        leftValue: { pickupIata, dropoffIata },
+        rightLabel: 'includedAirlines',
+        rightValue: airportCodes,
+        passed: matchesIata,
+      });
 
       if (!matchesIata) {
-        // None of the locations has an IATA code from the desired list
-        return reject(
-          `No matching airport IATA (pickup: ${pickupIata || 'none'}, dropoff: ${dropoffIata || 'none'}, wanted: [${airportCodes.join(', ')}])`
+        const res = fail(
+          'airportIata',
+          `No matching airport IATA (pickup: ${pickupIata || 'none'}, dropoff: ${dropoffIata || 'none'}, wanted: [${airportCodes.join(', ')}])`,
+          {
+            op: 'includes',
+            leftLabel: 'pickup/dropoff IATA',
+            leftValue: { pickupIata, dropoffIata },
+            rightLabel: 'includedAirlines',
+            rightValue: airportCodes,
+          }
         );
+        if (res) return res;
       }
     }
 
@@ -327,10 +637,31 @@ export class FilterEngine {
       const matchesZip = allowedZips.some(
         (zip) => pickupAddr.includes(zip) || dropoffAddr.includes(zip)
       );
+
+      traceCompare({
+        offerId,
+        filterName: 'allowedZipCodes',
+        op: 'some(includes)',
+        leftLabel: 'pickup/dropoff',
+        leftValue: { pickupAddr, dropoffAddr },
+        rightLabel: 'allowedZipCodes',
+        rightValue: allowedZips,
+        passed: matchesZip,
+      });
+
       if (!matchesZip) {
-        return reject(
-          `Route does not match any allowed ZIP code [${allowedZips.join(', ')}]`
+        const res = fail(
+          'allowedZipCodes',
+          `Route does not match any allowed ZIP code [${allowedZips.join(', ')}]`,
+          {
+            op: 'some(includes)',
+            leftLabel: 'pickup/dropoff',
+            leftValue: { pickupAddr, dropoffAddr },
+            rightLabel: 'allowedZipCodes',
+            rightValue: allowedZips,
+          }
         );
+        if (res) return res;
       }
     }
 
@@ -342,9 +673,38 @@ export class FilterEngine {
       const blocked = blockedZips.find(
         (zip) => pickupAddr.includes(zip) || dropoffAddr.includes(zip)
       );
+      const passedBlocked = !blocked;
+
+      traceCompare({
+        offerId,
+        filterName: 'blockedZipCodes',
+        op: 'none(includes)',
+        leftLabel: 'pickup/dropoff',
+        leftValue: { pickupAddr, dropoffAddr },
+        rightLabel: 'blockedZipCodes',
+        rightValue: blockedZips,
+        passed: passedBlocked,
+      });
+
       if (blocked) {
-        return reject(`Route includes blocked ZIP code '${blocked}'`);
+        const res = fail(
+          'blockedZipCodes',
+          `Route includes blocked ZIP code '${blocked}'`,
+          {
+            op: 'none(includes)',
+            leftLabel: 'pickup/dropoff',
+            leftValue: { pickupAddr, dropoffAddr },
+            rightLabel: 'blockedZipCodes',
+            rightValue: blockedZips,
+          }
+        );
+        if (res) return res;
       }
+    }
+
+    if (useFullEval && failures.length > 0) {
+      // In full-eval trace mode, at least one filter failed: return the first failure reason.
+      return reject(failures[0]);
     }
 
     // ── All filters passed ───────────────────────────────────────
