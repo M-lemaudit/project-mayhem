@@ -10,26 +10,92 @@
     --card-foreground: 240 5% 90%;
     --popover: 240 6% 7%;
     --popover-foreground: 240 5% 90%;
-    --primary: 142 76% 36%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 240 4% 16%;
-    --secondary-foreground: 240 5% 84%;
-    --muted: 240 4% 16%;
-    --muted-foreground: 240 5% 55%;
-    --accent: 240 4% 16%;
-    --accent-foreground: 240 5% 84%;
-    --destructive: 0 84% 60%;
-    --border: 240 4% 16%;
-    --input: 240 4% 16%;
-    --ring: 142 76% 36%;
+    --primary: 45 64% 52%; /* #d4af35 */
+    --primary-foreground: 45 100% 10%;
+    --background-dark: 45 10% 8%; /* #171612 */
+    --background-light: 45 5% 96%; /* #f8f7f6 */
+    --neutral-muted: 45 12% 19%; /* #37342a */
+    --neutral-border: 45 13% 28%; /* #514c3e */
   }
 }
 
+@layer utilities {
+  .bg-background-dark { background-color: #171612; }
+  .bg-background-light { background-color: #f8f7f6; }
+  .bg-neutral-muted { background-color: #37342a; }
+  .border-neutral-border { border-color: #514c3e; }
+}
+
 body {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
+  font-family: 'Inter', sans-serif;
+  background: #171612;
+  color: #e2e8f0;
   min-height: 100vh;
+}
+
+.pulse-gold {
+  box-shadow: 0 0 0 0 rgba(212, 175, 53, 0.7);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(212, 175, 53, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(212, 175, 53, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(212, 175, 53, 0); }
+}
+
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, 0.05) 20%,
+    rgba(255, 255, 255, 0.1) 60%,
+    rgba(255, 255, 255, 0)
+  );
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Elite dashboard helpers (from Stitch design) */
+.mesh-gradient {
+  background-image:
+    radial-gradient(at 0% 0%, rgba(212, 175, 53, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(212, 175, 53, 0.03) 0px, transparent 50%);
+}
+
+.glass-card {
+  background: rgba(20, 20, 20, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-card:hover {
+  border-color: rgba(212, 175, 53, 0.3);
+  background: rgba(20, 20, 20, 0.6);
+}
+
+.tracking-luxury {
+  letter-spacing: 0.15em;
+}
+
+.tracking-ultra-wide {
+  letter-spacing: 0.2em;
 }
 
 /* Scrollbar: dark theme (Chrome, Safari, Edge) */

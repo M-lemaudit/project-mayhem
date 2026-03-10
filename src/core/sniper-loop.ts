@@ -6,7 +6,7 @@
 import type { BlacklaneApi, BotStateService } from '../services';
 import { RateLimitError, TokenExpiredError } from '../services';
 import { getGlobalSettings } from '../config/global-settings';
-import { FilterEngine, getOfferPrice, type BotFilters, type ExistingRide, type OfferShape } from './filter-engine';
+import { FilterEngine, getOfferPrice, type BotFilters, type ExistingRide, type IncludedResource, type OfferShape } from './filter-engine';
 import { getSupabase } from '../config/supabase';
 import { logger } from '../utils';
 
@@ -47,9 +47,21 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
     ...(typeof raw.maxPrice === 'number' && { maxPrice: raw.maxPrice }),
     ...(typeof raw.maxDistance === 'number' && { maxDistance: raw.maxDistance }),
     ...(typeof raw.minHoursFromNow === 'number' && { minHoursFromNow: raw.minHoursFromNow }),
+    ...(typeof raw.minLeadHours === 'number' && { minHoursFromNow: raw.minLeadHours }),
     ...(typeof raw.minGapMinutes === 'number' && raw.minGapMinutes >= 0 && { minGapMinutes: raw.minGapMinutes }),
     workingHoursStart: start,
     workingHoursEnd: end,
+    // New Supabase-driven filters
+    ...(typeof raw.rideType === 'string' && raw.rideType.trim() && { rideType: raw.rideType as string }),
+    ...(Array.isArray(raw.includedAirlines) && (raw.includedAirlines as string[]).length > 0 && {
+      includedAirlines: raw.includedAirlines as string[],
+    }),
+    ...(Array.isArray(raw.allowedZipCodes) && (raw.allowedZipCodes as string[]).length > 0 && {
+      allowedZipCodes: raw.allowedZipCodes as string[],
+    }),
+    ...(Array.isArray(raw.blockedZipCodes) && (raw.blockedZipCodes as string[]).length > 0 && {
+      blockedZipCodes: raw.blockedZipCodes as string[],
+    }),
   };
 }
 
@@ -68,6 +80,15 @@ function getOffersList(data: unknown): OfferShape[] {
     const obj = data as Record<string, unknown>;
     if (Array.isArray(obj.offers)) return obj.offers as OfferShape[];
     if (Array.isArray(obj.data)) return obj.data as OfferShape[];
+  }
+  return [];
+}
+
+/** Extract the `included` array from a JSON:API response (locations, etc.). */
+function getIncludedList(data: unknown): IncludedResource[] {
+  if (data && typeof data === 'object') {
+    const obj = data as Record<string, unknown>;
+    if (Array.isArray(obj.included)) return obj.included as IncludedResource[];
   }
   return [];
 }
@@ -289,6 +310,7 @@ export class SniperLoop {
           const data = await this.api.getOffers();
           requestCount += 1;
           const offers = getOffersList(data);
+          const included = getIncludedList(data);
           if (!rawResponseLoggedOnce) {
             logRawOffersResponse(this.logPrefix, data, offers);
             rawResponseLoggedOnce = true;
@@ -316,7 +338,7 @@ export class SniperLoop {
               const idStr = String(id);
               if (this.processedOfferIds.has(idStr)) continue;
 
-              const result = FilterEngine.isMatch(offer, filters, existingRides);
+              const result = FilterEngine.isMatch(offer, filters, existingRides, included);
 
               if (result.match) {
                 this.processedOfferIds.add(idStr);

@@ -1,5 +1,6 @@
 /**
  * In-memory filter: decides if an offer is worth taking. No DB queries in hot loop.
+ * New location-based filters use the JSON:API `included` array for pickup/dropoff resolution.
  */
 
 export interface BotFilters {
@@ -16,6 +17,16 @@ export interface BotFilters {
   workingHoursEnd?: number;
   /** Minimum gap in minutes between the offered ride and any existing booked ride. */
   minGapMinutes?: number;
+
+  // ── New Supabase-driven filters ──────────────────────────────────
+  /** "transfer" | "hourly" | "both" — if empty/missing, accept all. */
+  rideType?: string;
+  /** Airport IATA codes the chauffeur wants (e.g. ["MCO"]). Empty = no airport filter. */
+  includedAirlines?: string[];
+  /** ZIP/postal codes the chauffeur allows. Empty = accept all. */
+  allowedZipCodes?: string[];
+  /** ZIP/postal codes the chauffeur blocks. Empty = block none. */
+  blockedZipCodes?: string[];
 }
 
 /** Cached ride from Supabase (start_at, end_at as ISO strings). */
@@ -30,7 +41,37 @@ export interface OfferShape {
   price_amount?: number;
   vehicle_type?: string;
   attributes?: Record<string, unknown>;
+  relationships?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+/** A single resource from the JSON:API `included` array (e.g. a location). */
+export interface IncludedResource {
+  id: string;
+  type: string;
+  attributes?: Record<string, unknown>;
+}
+
+// ── JSON:API helpers ───────────────────────────────────────────────
+
+/** Resolve pickup & dropoff location objects from the JSON:API `included` array. */
+export function resolveOfferLocations(
+  offer: OfferShape,
+  included: IncludedResource[]
+): { pickup: IncludedResource | null; dropoff: IncludedResource | null } {
+  const rels = offer.relationships as Record<string, { data?: { id?: string } }> | undefined;
+  const pickupId = rels?.pickup_location?.data?.id;
+  const dropoffId = rels?.dropoff_location?.data?.id;
+
+  let pickup: IncludedResource | null = null;
+  let dropoff: IncludedResource | null = null;
+
+  for (const inc of included) {
+    if (pickupId && inc.id === pickupId) pickup = inc;
+    if (dropoffId && inc.id === dropoffId) dropoff = inc;
+    if (pickup && dropoff) break;
+  }
+  return { pickup, dropoff };
 }
 
 const DATE_FIELDS = ['pickup_at', 'starts_at', 'scheduled_at', 'start_time', 'pickup_time', 'datetime'];
@@ -177,70 +218,159 @@ export class FilterEngine {
    * Returns whether the offer passes filters and a short reason.
    * Uses optional chaining so missing JSON fields do not crash.
    * @param existingRides - Cached rides from Supabase (start_at > now) for time-gap check.
+   * @param included - JSON:API `included` array (locations) for location-based filters.
    */
   static isMatch(
     offer: OfferShape,
     filters: BotFilters,
-    existingRides: ExistingRide[] = []
+    existingRides: ExistingRide[] = [],
+    included: IncludedResource[] = []
   ): MatchResult {
     const price = getOfferPrice(offer);
     const attrs = offer?.attributes as Record<string, unknown> | undefined;
     const vehicleType = (attrs?.service_class ?? offer?.vehicle_type) as string | undefined;
-    const typeStr = typeof vehicleType === 'string' ? vehicleType.trim() : '';
+    const typeStr = typeof vehicleType === 'string' ? vehicleType.trim().toLowerCase() : '';
 
+    // ── Price ─────────────────────────────────────────────────────
     if (price == null) {
-      return { match: false, reason: 'Missing price' };
+      return reject('Missing price');
     }
     if (price < filters.minPrice) {
-      return { match: false, reason: 'Price too low' };
+      return reject(`Price too low (${price} < min ${filters.minPrice})`);
     }
     if (typeof filters.maxPrice === 'number' && price > filters.maxPrice) {
-      return { match: false, reason: 'Price too high' };
+      return reject(`Price too high (${price} > max ${filters.maxPrice})`);
     }
 
+    // ── Vehicle type ──────────────────────────────────────────────
     const allowed = filters.allowedVehicleTypes ?? [];
-    if (allowed.length > 0 && typeStr && !allowed.includes(typeStr)) {
-      return {
-        match: false,
-        reason: 'Wrong vehicle',
-      };
+    if (allowed.length > 0 && typeStr) {
+      const allowedLower = allowed.map((v) => v.toLowerCase());
+      if (!allowedLower.includes(typeStr)) {
+        return reject(`Vehicle type '${typeStr}' not in allowed list [${allowed.join(', ')}]`);
+      }
     }
 
+    // ── Ride type (transfer / hourly / both) ─────────────────────
+    const rideType = filters.rideType?.trim().toLowerCase();
+    if (rideType && rideType !== 'both') {
+      const bookingType = (typeof attrs?.booking_type === 'string'
+        ? attrs.booking_type.trim().toLowerCase()
+        : '');
+      if (bookingType && bookingType !== rideType) {
+        return reject(
+          `Booking type '${bookingType}' not allowed (user only accepts '${rideType}')`
+        );
+      }
+    }
+
+    // ── Min lead hours ────────────────────────────────────────────
     const minHours = filters.minHoursFromNow;
     const offerStart = getOfferDate(offer);
     if (typeof minHours === 'number' && minHours > 0) {
       const nowUtc = Date.now();
       if (offerStart == null) {
-        return { match: false, reason: 'Missing starts_at' };
+        return reject('Missing starts_at');
       }
       const msDiff = offerStart.getTime() - nowUtc;
       const hoursFromNow = msDiff / (3600 * 1000);
       if (hoursFromNow < minHours) {
-        return {
-          match: false,
-          reason: `Too soon (starts in ${hoursFromNow.toFixed(1)}h, min ${minHours}h)`,
-        };
+        return reject(
+          `Too soon (starts in ${hoursFromNow.toFixed(1)}h, min ${minHours}h)`
+        );
       }
     }
 
+    // ── Time-gap with existing rides ─────────────────────────────
     const minGap = filters.minGapMinutes;
     if (typeof minGap === 'number' && minGap > 0 && existingRides.length > 0) {
       if (offerStart == null) {
-        return { match: false, reason: 'Missing starts_at (required for gap check)' };
+        return reject('Missing starts_at (required for gap check)');
       }
       const offerEnd = getOfferEndDate(offer, offerStart);
       if (offerEnd == null) {
-        return { match: false, reason: 'Missing end time (required for gap check)' };
+        return reject('Missing end time (required for gap check)');
       }
       const gapMs = minGap * 60 * 1000;
       if (checkTimeGap(offerStart, offerEnd, gapMs, existingRides)) {
-        return { match: false, reason: 'Schedule Conflict' };
+        return reject('Schedule Conflict');
       }
     }
 
+    // ── Location-based filters (airport & ZIP) ───────────────────
+    const { pickup, dropoff } = resolveOfferLocations(offer, included);
+
+    // Airport IATA filter
+    const airportCodes = filters.includedAirlines ?? [];
+    if (airportCodes.length > 0) {
+      const codesLower = airportCodes.map((c) => c.toLowerCase());
+      const pickupIata = getIata(pickup);
+      const dropoffIata = getIata(dropoff);
+
+      const matchesIata =
+        (pickupIata && codesLower.includes(pickupIata)) ||
+        (dropoffIata && codesLower.includes(dropoffIata));
+
+      if (!matchesIata) {
+        // None of the locations has an IATA code from the desired list
+        return reject(
+          `No matching airport IATA (pickup: ${pickupIata || 'none'}, dropoff: ${dropoffIata || 'none'}, wanted: [${airportCodes.join(', ')}])`
+        );
+      }
+    }
+
+    // Allowed ZIP codes
+    const allowedZips = filters.allowedZipCodes ?? [];
+    if (allowedZips.length > 0) {
+      const pickupAddr = getFormattedAddress(pickup);
+      const dropoffAddr = getFormattedAddress(dropoff);
+      const matchesZip = allowedZips.some(
+        (zip) => pickupAddr.includes(zip) || dropoffAddr.includes(zip)
+      );
+      if (!matchesZip) {
+        return reject(
+          `Route does not match any allowed ZIP code [${allowedZips.join(', ')}]`
+        );
+      }
+    }
+
+    // Blocked ZIP codes
+    const blockedZips = filters.blockedZipCodes ?? [];
+    if (blockedZips.length > 0) {
+      const pickupAddr = getFormattedAddress(pickup);
+      const dropoffAddr = getFormattedAddress(dropoff);
+      const blocked = blockedZips.find(
+        (zip) => pickupAddr.includes(zip) || dropoffAddr.includes(zip)
+      );
+      if (blocked) {
+        return reject(`Route includes blocked ZIP code '${blocked}'`);
+      }
+    }
+
+    // ── All filters passed ───────────────────────────────────────
     return {
       match: true,
       reason: `Price ${price} & ${typeStr || 'any'}`,
     };
   }
+}
+
+// ── Internal helpers ───────────────────────────────────────────────
+
+/** Build a rejection result and log it. */
+function reject(reason: string): MatchResult {
+  console.log(`[FILTER] Offer rejected: ${reason}`);
+  return { match: false, reason };
+}
+
+/** Get the lowercase airport IATA code from an included location, or empty string. */
+function getIata(loc: IncludedResource | null): string {
+  const iata = loc?.attributes?.airport_iata;
+  return typeof iata === 'string' && iata.trim() ? iata.trim().toLowerCase() : '';
+}
+
+/** Get the lowercase formatted_address_en from an included location. */
+function getFormattedAddress(loc: IncludedResource | null): string {
+  const addr = loc?.attributes?.formatted_address_en;
+  return typeof addr === 'string' ? addr.toLowerCase() : '';
 }

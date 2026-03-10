@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Chauffeur Elite - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#d4af35",
+                        "background-light": "#f8f7f6",
+                        "background-dark": "#0a0a0a",
+                        "card-dark": "#141414",
+                        "border-dark": "#262626"
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .tracking-luxury {
+            letter-spacing: 0.15em;
+        }
+    </style>
+<style>
+    .mesh-gradient {
+        background-image: 
+            radial-gradient(at 0% 0%, rgba(212, 175, 53, 0.05) 0px, transparent 50%),
+            radial-gradient(at 100% 0%, rgba(212, 175, 53, 0.03) 0px, transparent 50%);
+    }
+    .glass-card {
+        background: rgba(20, 20, 20, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-card:hover {
+        border-color: rgba(212, 175, 53, 0.3);
+        background: rgba(20, 20, 20, 0.6);
+    }
+    .champagne-glow {
+        filter: drop-shadow(0 0 4px rgba(212, 175, 53, 0.4));
+    }
+    .tracking-ultra-wide {
+        letter-spacing: 0.2em;
+    }
+</style></head>
+<body class="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 font-display min-h-screen">
+<div class="flex flex-col min-h-screen">
+<!-- Top Header -->
+<header class="border-b border-border-dark bg-background-dark/50 backdrop-blur-md sticky top-0 z-50">
+<div class="max-w-[1440px] mx-auto px-6 h-20 flex items-center justify-between">
+<!-- Brand -->
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-3xl">directions_car</span>
+<h1 class="text-xl font-light tracking-luxury uppercase text-slate-100">Chauffeur <span class="font-bold">Elite</span></h1>
+</div>
+<div class="h-6 w-[1px] bg-border-dark"></div>
+<!-- Global Bot Status -->
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/5 border border-primary/20">
+<span class="relative flex h-2 w-2">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+</span>
+<span class="text-[10px] font-bold tracking-widest uppercase text-primary">Global Bot Online</span>
+</div>
+</div>
+<!-- Search & Actions -->
+<div class="flex items-center gap-8">
+<div class="relative w-64 group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xl group-focus-within:text-primary transition-colors">search</span>
+<input class="w-full bg-card-dark border-border-dark rounded-lg pl-10 pr-4 py-2 text-sm focus:ring-1 focus:ring-primary focus:border-primary transition-all placeholder:text-slate-600" placeholder="Search accounts..." type="text"/>
+</div>
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center rounded-lg border border-border-dark hover:bg-border-dark transition-colors text-slate-400 hover:text-primary">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-lg border border-border-dark hover:bg-border-dark transition-colors text-slate-400 hover:text-primary">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<div class="h-8 w-[1px] bg-border-dark mx-2"></div>
+<div class="flex items-center gap-3 pl-2">
+<div class="text-right hidden sm:block">
+<p class="text-xs font-bold text-slate-100">Julian Voss</p>
+<p class="text-[10px] text-primary/80 tracking-tight">Premium Tier</p>
+</div>
+<div class="w-10 h-10 rounded-full border border-primary/30 p-0.5">
+<img class="w-full h-full rounded-full object-cover" data-alt="Professional chauffeur profile portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBdueTnP0AvdQ1MAO-X072TlNMJGI3fmLS0kWTDNjoEfIJZED3_ipBFr2RF_6JfuzSeLzsiF9RZt4qa9Tb5OkHdAIX07u2zkB24DHn9b-QilHSmBdlA8_TfE7fEVHXW6GMckRjxfKz3z3OVBpad7z_bvbS59FR-Ahbnv83hd1cThmtvOkeN89whFK1gkv39sBaODtZDW38hQxh0kpFDUP0-ioZxjl_oTVQCHuFuRT4jkYBd_JafYQKbx3lAXVKXl8nyaaAnJT2oWzOx"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+</header>
+<main class="max-w-[1440px] mx-auto w-full p-8 flex-1 mesh-gradient">
+<!-- Breadcrumbs / Section Title -->
+<div class="mb-10 flex items-end justify-between">
+<div>
+<h2 class="text-4xl font-light tracking-tight text-slate-100">Executive Dashboard</h2>
+<p class="text-slate-500 mt-1">Real-time performance across your global fleet networks.</p>
+</div>
+<div class="flex gap-3">
+<button class="px-5 py-2.5 bg-card-dark border border-border-dark text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-border-dark transition-colors">
+<span class="material-symbols-outlined text-lg">calendar_today</span>
+                        Last 30 Days
+                    </button>
+<button class="px-5 py-2.5 bg-primary text-black rounded-lg text-sm font-bold flex items-center gap-2 hover:brightness-110 transition-all shadow-lg shadow-primary/10">
+<span class="material-symbols-outlined text-lg">download</span>
+                        Export Report
+                    </button>
+</div>
+</div>
+<!-- Aggregate Metrics -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12"><!-- Total Revenue -->
+<div class="glass-card p-8 rounded-2xl relative overflow-hidden group transition-all duration-500">
+<p class="text-[10px] font-bold tracking-ultra-wide uppercase text-slate-500 mb-6">Total Revenue</p>
+<div class="flex items-baseline justify-between relative z-10">
+<h3 class="text-4xl font-light text-slate-100">$128,450.00</h3>
+<div class="text-emerald-500 text-xs font-medium flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+<span class="material-symbols-outlined text-[14px]">trending_up</span>
+            12.5%
+        </div>
+</div>
+<!-- Sparkline -->
+<div class="mt-8 h-12 w-full">
+<svg class="w-full h-full champagne-glow" preserveaspectratio="none" viewbox="0 0 100 20">
+<path d="M0 18 Q 10 15, 20 17 T 40 10 T 60 12 T 80 5 T 100 8" fill="none" stroke="#d4af35" stroke-width="1.5"></path>
+<path d="M0 18 Q 10 15, 20 17 T 40 10 T 60 12 T 80 5 T 100 8 V 20 H 0 Z" fill="url(#grad1)" opacity="0.1"></path>
+<defs>
+<lineargradient id="grad1" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#d4af35;stop-opacity:1"></stop>
+<stop offset="100%" style="stop-color:#d4af35;stop-opacity:0"></stop>
+</lineargradient>
+</defs>
+</svg>
+</div>
+</div>
+<!-- Total Sniped Rides -->
+<div class="glass-card p-8 rounded-2xl relative overflow-hidden group transition-all duration-500">
+<p class="text-[10px] font-bold tracking-ultra-wide uppercase text-slate-500 mb-6">Total Sniped Rides</p>
+<div class="flex items-baseline justify-between relative z-10">
+<h3 class="text-4xl font-light text-slate-100">1,242</h3>
+<div class="text-emerald-500 text-xs font-medium flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+<span class="material-symbols-outlined text-[14px]">trending_up</span>
+            4.2%
+        </div>
+</div>
+<p class="mt-8 text-[11px] text-slate-500 flex items-center gap-2">
+<span class="w-1 h-1 rounded-full bg-primary"></span>
+        Avg. snipe: <span class="text-slate-300 font-medium">0.4s</span>
+</p>
+</div>
+<!-- Success Rate -->
+<div class="glass-card p-8 rounded-2xl relative overflow-hidden group transition-all duration-500">
+<p class="text-[10px] font-bold tracking-ultra-wide uppercase text-slate-500 mb-6">Success Rate</p>
+<div class="flex items-baseline justify-between relative z-10">
+<h3 class="text-4xl font-light text-slate-100">98.2%</h3>
+<div class="text-emerald-500 text-xs font-medium flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+<span class="material-symbols-outlined text-[14px]">trending_up</span>
+            0.8%
+        </div>
+</div>
+<!-- Sparkline -->
+<div class="mt-8 h-12 w-full">
+<svg class="w-full h-full champagne-glow" preserveaspectratio="none" viewbox="0 0 100 20">
+<path d="M0 10 Q 20 8, 40 12 T 60 5 T 80 7 T 100 2" fill="none" stroke="#d4af35" stroke-width="1.5"></path>
+<path d="M0 10 Q 20 8, 40 12 T 60 5 T 80 7 T 100 2 V 20 H 0 Z" fill="url(#grad2)" opacity="0.1"></path>
+<defs>
+<lineargradient id="grad2" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#d4af35;stop-opacity:1"></stop>
+<stop offset="100%" style="stop-color:#d4af35;stop-opacity:0"></stop>
+</lineargradient>
+</defs>
+</svg>
+</div>
+</div></div>
+<!-- Accounts Section -->
+<div class="space-y-6">
+<div class="flex items-center justify-between">
+<h3 class="text-xl font-light tracking-luxury uppercase text-slate-400 tracking-ultra-wide">Network Accounts</h3>
+<div class="flex gap-2">
+<button class="p-2 text-slate-500 hover:text-slate-100"><span class="material-symbols-outlined">grid_view</span></button>
+<button class="p-2 text-slate-500 hover:text-slate-100"><span class="material-symbols-outlined">list</span></button>
+</div>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+<!-- Blacklane London -->
+<!-- Blacklane London -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center overflow-hidden">
+<div class="bg-white text-black font-black text-[8px] p-0.5">BLACKLANE</div>
+</div>
+<span class="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">Active</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Blacklane - London</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Tier 1 Service • LHR/LCY</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">£1,420.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Sixt Paris -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-[#FF5F00] flex items-center justify-center">
+<span class="text-white font-black text-[9px]">SIXT</span>
+</div>
+<span class="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">Active</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Sixt - Paris</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Premium Fleet • CDG/ORY</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">€2,105.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Wheely Dubai -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center">
+<span class="text-slate-100 font-serif italic text-base">W</span>
+</div>
+<span class="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-white/10">Standby</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Wheely - Dubai</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Business Class • DXB Area</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">$0.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Sixt Paris -->
+<!-- Blacklane London -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center overflow-hidden">
+<div class="bg-white text-black font-black text-[8px] p-0.5">BLACKLANE</div>
+</div>
+<span class="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">Active</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Blacklane - London</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Tier 1 Service • LHR/LCY</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">£1,420.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Sixt Paris -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-[#FF5F00] flex items-center justify-center">
+<span class="text-white font-black text-[9px]">SIXT</span>
+</div>
+<span class="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">Active</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Sixt - Paris</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Premium Fleet • CDG/ORY</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">€2,105.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Wheely Dubai -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center">
+<span class="text-slate-100 font-serif italic text-base">W</span>
+</div>
+<span class="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-white/10">Standby</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Wheely - Dubai</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Business Class • DXB Area</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">$0.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Wheely Dubai -->
+<!-- Blacklane London -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center overflow-hidden">
+<div class="bg-white text-black font-black text-[8px] p-0.5">BLACKLANE</div>
+</div>
+<span class="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">Active</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Blacklane - London</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Tier 1 Service • LHR/LCY</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">£1,420.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Sixt Paris -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-[#FF5F00] flex items-center justify-center">
+<span class="text-white font-black text-[9px]">SIXT</span>
+</div>
+<span class="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">Active</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Sixt - Paris</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Premium Fleet • CDG/ORY</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">€2,105.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Wheely Dubai -->
+<div class="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group">
+<div class="flex justify-between items-start mb-6">
+<div class="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center">
+<span class="text-slate-100 font-serif italic text-base">W</span>
+</div>
+<span class="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-white/10">Standby</span>
+</div>
+<h4 class="text-base font-semibold text-slate-100 group-hover:text-primary transition-colors">Wheely - Dubai</h4>
+<p class="text-xs text-slate-500 mt-1 mb-6">Business Class • DXB Area</p>
+<div class="flex items-center justify-between pt-4 border-t border-white/5">
+<div>
+<p class="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">Current Revenue</p>
+<p class="text-sm font-medium text-slate-200">$0.00</p>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+</div>
+</div>
+<!-- Add Account Card -->
+<div class="border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center p-8 hover:border-primary/40 hover:bg-primary/5 transition-all duration-500 cursor-pointer group">
+<div class="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-4 group-hover:bg-primary group-hover:scale-110 transition-all duration-500">
+<span class="material-symbols-outlined text-slate-400 group-hover:text-black font-light">add</span>
+</div>
+<p class="text-sm font-semibold text-slate-400 group-hover:text-slate-100 transition-colors uppercase tracking-widest">Add Account</p>
+<p class="text-[10px] text-slate-600 mt-2 font-medium">Connect via API</p>
+</div>
+</div>
+</div>
+<!-- Recent Activity List -->
+<div class="mt-16 bg-card-dark/30 rounded-xl border border-border-dark overflow-hidden glass-card"><div class="px-8 py-5 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+<h3 class="text-[10px] font-bold tracking-ultra-wide uppercase text-slate-400">Live Snipe Log</h3>
+<div class="flex items-center gap-2 text-[9px] uppercase tracking-ultra-wide text-primary">
+<span class="relative flex h-1.5 w-1.5">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-primary"></span>
+</span>
+        Live Stream
+    </div>
+</div>
+<div class="divide-y divide-white/5">
+<!-- Log Item 1 -->
+<div class="px-8 py-4 flex items-center justify-between hover:bg-white/[0.03] transition-colors group">
+<div class="flex items-center gap-5">
+<div class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"></div>
+<div>
+<p class="text-sm font-light text-slate-200">Ride Sniped: <span class="text-slate-400">LHR Terminal 5 → Mayfair</span></p>
+<p class="text-[9px] text-slate-600 uppercase tracking-widest mt-0.5">Blacklane London • 2m ago</p>
+</div>
+</div>
+<p class="text-sm font-medium text-primary champagne-glow tracking-tight">+ £85.00</p>
+</div>
+<!-- Log Item 2 -->
+<div class="px-8 py-4 flex items-center justify-between hover:bg-white/[0.03] transition-colors group">
+<div class="flex items-center gap-5">
+<div class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"></div>
+<div>
+<p class="text-sm font-light text-slate-200">Ride Sniped: <span class="text-slate-400">CDG → 8th Arrondissement</span></p>
+<p class="text-[9px] text-slate-600 uppercase tracking-widest mt-0.5">Sixt Paris • 14m ago</p>
+</div>
+</div>
+<p class="text-sm font-medium text-primary champagne-glow tracking-tight">+ €110.00</p>
+</div>
+<!-- Log Item 3 -->
+<div class="px-8 py-4 flex items-center justify-between hover:bg-white/[0.03] transition-colors group">
+<div class="flex items-center gap-5">
+<div class="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.4)]"></div>
+<div>
+<p class="text-sm font-light text-slate-200">Conflict Resolved: <span class="text-slate-400">High Latency Detected</span></p>
+<p class="text-[9px] text-slate-600 uppercase tracking-widest mt-0.5">Wheely Dubai • 45m ago</p>
+</div>
+</div>
+<p class="text-[9px] font-bold text-slate-600 tracking-ultra-wide uppercase">System</p>
+</div>
+</div>
+<button class="w-full py-5 text-[9px] font-bold tracking-ultra-wide uppercase text-slate-500 hover:text-primary hover:bg-white/[0.03] transition-all border-t border-white/5">View Full Activity History</button></div>
+</main>
+<!-- Minimal Footer -->
+<footer class="max-w-[1440px] mx-auto w-full px-8 py-10 border-t border-border-dark flex flex-col md:flex-row justify-between items-center gap-6">
+<div class="flex items-center gap-2 opacity-50">
+<span class="material-symbols-outlined text-primary">directions_car</span>
+<span class="text-xs tracking-luxury uppercase font-light">Chauffeur Elite © 2024</span>
+</div>
+<div class="flex gap-8">
+<a class="text-xs text-slate-600 hover:text-primary transition-colors uppercase tracking-widest" href="#">Network Status</a>
+<a class="text-xs text-slate-600 hover:text-primary transition-colors uppercase tracking-widest" href="#">Documentation</a>
+<a class="text-xs text-slate-600 hover:text-primary transition-colors uppercase tracking-widest" href="#">Support</a>
+<a class="text-xs text-slate-600 hover:text-primary transition-colors uppercase tracking-widest" href="#">Legal</a>
+</div>
+<div class="flex items-center gap-4">
+<div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+<span class="text-[10px] text-slate-500 uppercase tracking-widest">All Systems Operational</span>
+</div>
+</footer>
+</div>
+</body></html>

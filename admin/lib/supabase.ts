@@ -15,6 +15,7 @@ export interface BotRow {
   user_id: string | null;
   name: string | null;
   email: string;
+  password?: string | null;
   status: string;
   filters: Record<string, unknown>;
   session: Record<string, unknown>;
