@@ -313,27 +313,37 @@ export async function loginAndGetToken(
 
 /**
  * Automatically fetch the Blacklane User ID using the acquired session token.
- * This calls the /hades/users/me endpoint and extracts the `id`.
+ * This calls the partner portal /me endpoint and extracts the root-level `id`.
  */
 export async function discoverBlacklaneUserId(
-  accessToken: string,
-  acceptHeader: string
+  accessToken: string
 ): Promise<string | undefined> {
   try {
-    const response = await fetch('https://athena.blacklane.com/hades/users/me', {
+    const response = await fetch('https://partner-portal-api.blacklane.com/me', {
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        Accept: acceptHeader,
+        Accept: 'application/json',
       },
     });
-    if (!response.ok) return undefined;
-    const data = await response.json() as Record<string, unknown>;
-    const id = (data?.data as Record<string, unknown>)?.id;
-    if (typeof id === 'string' && id) {
+    if (!response.ok) {
+      logger.warn('[AUTH] User ID auto-discovery request failed', {
+        status: response.status,
+        statusText: response.statusText,
+      });
+      return undefined;
+    }
+    const data = await response.json() as { id?: unknown };
+    const id = data?.id;
+    if (typeof id === 'string' && id.trim().length > 0) {
       return id;
     }
+    if (typeof id === 'number' && Number.isFinite(id)) {
+      return String(id);
+    }
   } catch (err) {
-    logger.warn('[AUTH] Error during auto-discovery of User ID', { error: err instanceof Error ? err.message : String(err) });
+    logger.warn('[AUTH] Error during auto-discovery of User ID', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return undefined;
   }
   return undefined;

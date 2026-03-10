@@ -94,10 +94,10 @@ async function runBotInstance(
     let blacklaneUserId = bot.blacklane_user_id;
 
     if (!blacklaneUserId) {
-      const discoveredId = await discoverBlacklaneUserId(session.accessToken, session.acceptHeader);
+      const discoveredId = await discoverBlacklaneUserId(session.accessToken);
       if (discoveredId) {
         blacklaneUserId = discoveredId;
-        logger.info(`[AUTH] Auto-discovered Blacklane User ID: ${discoveredId}. Updating database...`);
+        logger.info(`[AUTH] Auto-discovered Blacklane User ID: ${discoveredId}`);
         const supabase = getSupabase();
         await supabase
           .from('bots')
