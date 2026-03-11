@@ -7,6 +7,7 @@ export {
   BlacklaneApi,
   TokenExpiredError,
   RateLimitError,
+  InvalidOfferStateError,
   type UpcomingBooking,
   type PlannedRide,
 } from './blacklane-api';
