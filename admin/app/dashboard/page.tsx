@@ -3,10 +3,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, type BotRow } from '@/lib/supabase';
-import { addClient } from '@/app/actions/bots';
+import { addClient, deleteClient } from '@/app/actions/bots';
 import { LiveSnipeLog } from '@/components/live-snipe-log';
 import { ComingSoonCard } from '@/components/coming-soon-card';
 import { FullPageLoader } from '@/components/full-page-loader';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 interface NetworkAccount {
   id: string;
@@ -64,6 +71,7 @@ export default function DashboardPage() {
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [botToDelete, setBotToDelete] = useState<NetworkAccount | null>(null);
 
   const fetchBots = async () => {
     const { data, error } = await supabase
@@ -89,6 +97,24 @@ export default function DashboardPage() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  const confirmDeleteBot = (account: NetworkAccount) => {
+    setBotToDelete(account);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!botToDelete) return;
+    const result = await deleteClient(botToDelete.id);
+    if ((result as any)?.error) {
+      alert('Failed to delete account: ' + (result as any).error);
+      return;
+    }
+
+    // Optimistic update + full refresh from Supabase
+    setBots((prev) => prev.filter((b) => b.id !== botToDelete.id));
+    setBotToDelete(null);
+    fetchBots();
+  };
 
   const handleLogout = async () => {
     const { createClient } = await import('@/lib/supabase/client');
@@ -219,11 +245,9 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Aggregate metrics now locked behind Coming Soon */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          <ComingSoonCard label="Global revenue analytics will be available here soon." />
-          <ComingSoonCard label="Detailed snipe statistics will be available here soon." />
-          <ComingSoonCard label="Advanced success-rate insights will be available here soon." />
+        {/* Live Snipe Log (global) */}
+        <div className="mb-12">
+          <LiveSnipeLog mode="global" botsById={botsById} />
         </div>
 
         {/* Network Accounts (dynamic) */}
@@ -246,8 +270,7 @@ export default function DashboardPage() {
             {accounts.map((account) => (
               <div
                 key={account.id}
-                className="glass-card p-6 rounded-2xl transition-all duration-300 cursor-pointer group"
-                onClick={() => router.push(`/accounts/${account.id}`)}
+                className="glass-card p-6 rounded-2xl transition-all duration-300 group"
               >
                 <div className="flex justify-between items-start mb-6">
                   {/* Provider logo variant */}
@@ -280,22 +303,38 @@ export default function DashboardPage() {
                     </div>
                   )}
 
-                  {/* Status pill */}
-                  {account.statusLabel === 'Active' ? (
-                    <span className="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">
-                      Active
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-white/10">
-                      Standby
-                    </span>
-                  )}
+                  {/* Actions: status pill + delete */}
+                  <div className="flex items-center gap-2">
+                    {account.statusLabel === 'Active' ? (
+                      <span className="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">
+                        Active
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-white/10">
+                        Standby
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => confirmDeleteBot(account)}
+                      className="ml-1 flex items-center justify-center w-7 h-7 rounded-full border border-rose-500/40 bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white transition-colors text-[16px]"
+                      aria-label="Delete account"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">delete</span>
+                    </button>
+                  </div>
                 </div>
 
-                <h4 className="text-base font-semibold text-slate-100 group-hover:text-[#d4af35] transition-colors">
-                  {account.title}
-                </h4>
-                <p className="text-xs text-slate-500 mt-1 mb-6">{account.subtitle}</p>
+                <button
+                  type="button"
+                  onClick={() => router.push(`/accounts/${account.id}`)}
+                  className="text-left w-full"
+                >
+                  <h4 className="text-base font-semibold text-slate-100 group-hover:text-[#d4af35] transition-colors">
+                    {account.title}
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-1 mb-6">{account.subtitle}</p>
+                </button>
 
                 <div className="flex items-center justify-between pt-4 border-t border-white/5">
                   <div>
@@ -332,9 +371,39 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Live Snipe Log (global) */}
-        <LiveSnipeLog mode="global" botsById={botsById} />
       </main>
+
+      {/* Delete account confirmation modal */}
+      <Dialog open={!!botToDelete} onOpenChange={(open) => !open && setBotToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete account</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-zinc-300">
+            Are you sure you want to delete{' '}
+            <span className="font-semibold text-white">
+              {botToDelete?.title || botToDelete?.providerLabel}
+            </span>{' '}
+            and all of its settings? This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setBotToDelete(null)}
+              className="px-4 py-2 rounded-md border border-zinc-600 bg-zinc-900 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDelete}
+              className="px-4 py-2 rounded-md bg-rose-600 text-sm font-semibold text-white hover:bg-rose-500 transition-colors"
+            >
+              Delete account
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Account Modal */}
       {isAddModalOpen && (

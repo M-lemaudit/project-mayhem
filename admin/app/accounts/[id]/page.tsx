@@ -304,12 +304,6 @@ export default function AccountPage({ params }: AccountPageProps) {
               </div>
             </section>
 
-            <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-              <ComingSoonCard label="Account revenue analytics will be available here soon." />
-              <ComingSoonCard label="Detailed last-ride statistics will be available here soon." />
-              <ComingSoonCard label="Advanced system health insights will be available here soon." />
-            </section>
-
             {/* Bot-specific live log */}
             <div className="mb-10">
               <LiveSnipeLog mode="bot" botId={id} />
