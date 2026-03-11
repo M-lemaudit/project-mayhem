@@ -4,7 +4,7 @@
  */
 
 import type { BlacklaneApi, BotStateService } from '../services';
-import { RateLimitError, TokenExpiredError } from '../services';
+import { InvalidOfferStateError, RateLimitError, TokenExpiredError } from '../services';
 import { getGlobalSettings } from '../config/global-settings';
 import { FilterEngine, getOfferPrice, resolveOfferLocations, type BotFilters, type ExistingRide, type IncludedResource, type OfferShape } from './filter-engine';
 import { getSupabase } from '../config/supabase';
@@ -463,6 +463,14 @@ export class SniperLoop {
             if (status !== 'STOPPED' && this.botState) {
               await this.botState.updateStatus('RUNNING').catch(() => {});
             }
+          } else if (err instanceof InvalidOfferStateError) {
+            const message = err instanceof Error && err.message ? err.message : 'invalid offer state (410)';
+            console.log(
+              `${this.logPrefix} Offre non acceptée (état invalide / déjà prise). On continue le sniper loop. Détail: ${message}`
+            );
+            logger.info(`${this.logPrefix} Offer could not be accepted due to invalid state; continuing loop.`, {
+              error: message,
+            });
           } else {
             console.error(`${this.logPrefix} Erreur cycle:`, err);
             if (this.botState) await this.botState.updateStatus('ERROR_AUTH').catch(() => {});

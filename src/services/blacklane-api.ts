@@ -3,7 +3,7 @@
  */
 
 import https from 'node:https';
-import axios, { type AxiosInstance } from 'axios';
+import axios, { type AxiosInstance, type AxiosError } from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { AuthCookie } from '../core/auth';
 import { getOfferPrice } from '../core/filter-engine';
@@ -35,6 +35,15 @@ export class RateLimitError extends Error {
     super(message);
     this.name = 'RateLimitError';
     Object.setPrototypeOf(this, RateLimitError.prototype);
+  }
+}
+
+/** Thrown when accepting an offer fails because its state is no longer valid (410 invalid_state). */
+export class InvalidOfferStateError extends Error {
+  constructor(message = 'Offer state is not valid (410)') {
+    super(message);
+    this.name = 'InvalidOfferStateError';
+    Object.setPrototypeOf(this, InvalidOfferStateError.prototype);
   }
 }
 
@@ -415,12 +424,34 @@ export class BlacklaneApi {
     const isProduction = process.env.IS_PRODUCTION?.toLowerCase().trim() === 'true';
     if (!isProduction) {
       // Safety kill-switch: never hit the real endpoint outside production.
-      logger.info(`[SIMULATION] Would send POST to ${url} with Payload: ${JSON.stringify(payload)} (cleanPrice: ${cleanPrice}) and Headers: ${JSON.stringify(headers)}`);
+      logger.info(
+        `[SIMULATION] Would send POST to ${url} with Payload: ${JSON.stringify(
+          payload
+        )} (cleanPrice: ${cleanPrice}) and Headers: ${JSON.stringify(headers)}`
+      );
       return { status: 'simulation_success', offer_id: payload.id as string | undefined };
     }
 
-    const { data } = await this.client.post<unknown>(url, payload, { headers });
-    logger.info(`[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${url} succeeded.`);
-    return data as { status: string; offer_id?: string } | Record<string, unknown>;
+    try {
+      const { data } = await this.client.post<unknown>(url, payload, { headers });
+      logger.info(
+        `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${url} succeeded.`
+      );
+      return data as { status: string; offer_id?: string } | Record<string, unknown>;
+    } catch (error) {
+      const err = error as AxiosError<any>;
+      const status = err.response?.status;
+      const code = (err.response?.data as { code?: string } | undefined)?.code;
+      if (status === 410 && code === 'invalid_state') {
+        logger.info(
+          `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
+        );
+        throw new InvalidOfferStateError(
+          (err.response?.data as { detail?: string } | undefined)?.detail ??
+            'Offer state is not valid (410)'
+        );
+      }
+      throw error;
+    }
   }
 }
