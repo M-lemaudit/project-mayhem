@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { supabase, type BotRow } from '@/lib/supabase';
 import { addClient } from '@/app/actions/bots';
 import { LiveSnipeLog } from '@/components/live-snipe-log';
+import { ComingSoonCard } from '@/components/coming-soon-card';
+import { FullPageLoader } from '@/components/full-page-loader';
 
 interface NetworkAccount {
   id: string;
@@ -141,11 +143,7 @@ export default function DashboardPage() {
   );
 
   if (loading) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-[#0a0a0a] text-slate-400">
-        <p>Loading executive dashboard…</p>
-      </main>
-    );
+    return <FullPageLoader message="Loading executive dashboard…" />;
   }
 
   return (
@@ -153,26 +151,14 @@ export default function DashboardPage() {
       {/* Top Header (from Stitch design) */}
       <header className="border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-[1440px] mx-auto px-6 h-20 flex items-center justify-between">
-          {/* Brand + global status */}
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-[#d4af35] text-3xl">
-                directions_car
-              </span>
-              <h1 className="text-xl font-light tracking-luxury uppercase text-slate-100">
-                Chauffeur <span className="font-bold">Elite</span>
-              </h1>
-            </div>
-            <div className="h-6 w-px bg-neutral-800" />
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#d4af35]/5 border border-[#d4af35]/20">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#d4af35] opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#d4af35]" />
-              </span>
-              <span className="text-[10px] font-bold tracking-widest uppercase text-[#d4af35]">
-                Global Bot Online
-              </span>
-            </div>
+          {/* Brand */}
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[#d4af35] text-3xl">
+              directions_car
+            </span>
+            <h1 className="text-xl font-light tracking-luxury uppercase text-slate-100">
+              Chauffeur <span className="font-bold">Elite</span>
+            </h1>
           </div>
           {/* Search + user */}
           <div className="flex items-center gap-8">
@@ -187,30 +173,18 @@ export default function DashboardPage() {
               />
             </div>
             <div className="flex items-center gap-4">
-              <button className="w-10 h-10 flex items-center justify-center rounded-lg border border-[#262626] hover:bg-[#262626] transition-colors text-slate-400 hover:text-[#d4af35]">
+              <button
+                className="w-10 h-10 flex items-center justify-center rounded-lg border border-[#262626] bg-[#141414] text-slate-600 cursor-not-allowed opacity-60"
+                disabled
+              >
                 <span className="material-symbols-outlined">notifications</span>
               </button>
               <button
-                className="w-10 h-10 flex items-center justify-center rounded-lg border border-[#262626] hover:bg-[#262626] transition-colors text-slate-400 hover:text-[#d4af35]"
+                className="px-4 py-2 rounded-lg border border-[#262626] bg-[#141414] text-xs font-semibold text-slate-300 hover:bg-[#262626] hover:text-[#d4af35] transition-colors"
                 onClick={handleLogout}
               >
-                <span className="material-symbols-outlined">settings</span>
+                Log out
               </button>
-              <div className="h-8 w-px bg-[#262626] mx-2" />
-              <div className="flex items-center gap-3 pl-2">
-                <div className="text-right hidden sm:block">
-                  <p className="text-xs font-bold text-slate-100">Julian Voss</p>
-                  <p className="text-[10px] text-[#d4af35]/80 tracking-tight">Premium Tier</p>
-                </div>
-                <div className="w-10 h-10 rounded-full border border-[#d4af35]/30 p-0.5 overflow-hidden">
-                  {/* Static avatar from Stitch design */}
-                  <img
-                    className="w-full h-full rounded-full object-cover"
-                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuBdueTnP0AvdQ1MAO-X072TlNMJGI3fmLS0kWTDNjoEfIJZED3_ipBFr2RF_6JfuzSeLzsiF9RZt4qa9Tb5OkHdAIX07u2zkB24DHn9b-QilHSmBdlA8_TfE7fEVHXW6GMckRjxfKz3z3OVBpad7z_bvbS59FR-Ahbnv83hd1cThmtvOkeN89whFK1gkv39sBaODtZDW38hQxh0kpFDUP0-ioZxjl_oTVQCHuFuRT4jkYBd_JafYQKbx3lAXVKXl8nyaaAnJT2oWzOx"
-                    alt="Chauffeur profile"
-                  />
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -228,60 +202,28 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex gap-3">
-            <button className="px-5 py-2.5 bg-[#141414] border border-[#262626] text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-[#262626] transition-colors">
+            <button
+              className="px-5 py-2.5 bg-[#141414] border border-[#262626] text-slate-500 rounded-lg text-sm font-medium flex items-center gap-2 cursor-not-allowed opacity-60"
+              disabled
+            >
               <span className="material-symbols-outlined text-lg">calendar_today</span>
               Last 30 Days
             </button>
-            <button className="px-5 py-2.5 bg-[#d4af35] text-black rounded-lg text-sm font-bold flex items-center gap-2 hover:brightness-110 transition-all shadow-lg shadow-[#d4af35]/10">
+            <button
+              className="px-5 py-2.5 bg-[#262626] text-slate-500 rounded-lg text-sm font-bold flex items-center gap-2 cursor-not-allowed opacity-60"
+              disabled
+            >
               <span className="material-symbols-outlined text-lg">download</span>
               Export Report
             </button>
           </div>
         </div>
 
-        {/* Aggregate metrics (still static for now) */}
+        {/* Aggregate metrics now locked behind Coming Soon */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          <div className="glass-card p-8 rounded-2xl relative overflow-hidden group transition-all duration-500">
-            <p className="text-[10px] font-bold tracking-ultra-wide uppercase text-slate-500 mb-6">
-              Total Revenue
-            </p>
-            <div className="flex items-baseline justify-between relative z-10">
-              <h3 className="text-4xl font-light text-slate-100">$128,450.00</h3>
-              <div className="text-emerald-500 text-xs font-medium flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                <span className="material-symbols-outlined text-[14px]">trending_up</span>
-                12.5%
-              </div>
-            </div>
-          </div>
-          <div className="glass-card p-8 rounded-2xl relative overflow-hidden group transition-all duration-500">
-            <p className="text-[10px] font-bold tracking-ultra-wide uppercase text-slate-500 mb-6">
-              Total Sniped Rides
-            </p>
-            <div className="flex items-baseline justify-between relative z-10">
-              <h3 className="text-4xl font-light text-slate-100">1,242</h3>
-              <div className="text-emerald-500 text-xs font-medium flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                <span className="material-symbols-outlined text-[14px]">trending_up</span>
-                4.2%
-              </div>
-            </div>
-            <p className="mt-8 text-[11px] text-slate-500 flex items-center gap-2">
-              <span className="w-1 h-1 rounded-full bg-[#d4af35]" />
-              Avg. snipe:
-              <span className="text-slate-300 font-medium">0.4s</span>
-            </p>
-          </div>
-          <div className="glass-card p-8 rounded-2xl relative overflow-hidden group transition-all duration-500">
-            <p className="text-[10px] font-bold tracking-ultra-wide uppercase text-slate-500 mb-6">
-              Success Rate
-            </p>
-            <div className="flex items-baseline justify-between relative z-10">
-              <h3 className="text-4xl font-light text-slate-100">98.2%</h3>
-              <div className="text-emerald-500 text-xs font-medium flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                <span className="material-symbols-outlined text-[14px]">trending_up</span>
-                0.8%
-              </div>
-            </div>
-          </div>
+          <ComingSoonCard label="Global revenue analytics will be available here soon." />
+          <ComingSoonCard label="Detailed snipe statistics will be available here soon." />
+          <ComingSoonCard label="Advanced success-rate insights will be available here soon." />
         </div>
 
         {/* Network Accounts (dynamic) */}

@@ -6,6 +6,8 @@ import { supabase, type BotRow } from '@/lib/supabase';
 import Link from 'next/link';
 import { updateClient, toggleClientStatus } from '@/app/actions/bots';
 import { LiveSnipeLog } from '@/components/live-snipe-log';
+import { FullPageLoader } from '@/components/full-page-loader';
+import { ComingSoonCard } from '@/components/coming-soon-card';
 
 interface AccountPageProps {
   params: { id: string };
@@ -214,14 +216,7 @@ export default function AccountPage({ params }: AccountPageProps) {
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-[#171612] flex items-center justify-center text-primary">
-        <div className="flex flex-col items-center gap-4">
-          <span className="material-symbols-outlined text-5xl animate-spin">auto_transmission</span>
-          <p className="text-slate-400 font-medium">Loading account settings...</p>
-        </div>
-      </div>
-    );
+    return <FullPageLoader message="Loading account settings..." />;
   }
 
   return (
@@ -229,11 +224,13 @@ export default function AccountPage({ params }: AccountPageProps) {
       <div className="relative flex h-auto min-h-screen w-full flex-col overflow-x-hidden">
         <div className="layout-container flex h-full grow flex-col">
           <header className="flex items-center justify-between whitespace-nowrap border-b border-solid border-[#514c3e] px-6 md:px-10 py-4 bg-[#171612]/50 backdrop-blur-md sticky top-0 z-50">
-            <div className="flex items-center gap-4">
-              <div className="text-[#d4af35]">
-                <span className="material-symbols-outlined text-3xl">auto_transmission</span>
-              </div>
-              <h2 className="text-slate-100 text-lg font-bold leading-tight tracking-[-0.015em] font-display">ChauffeurBot</h2>
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[#d4af35] text-3xl">
+                directions_car
+              </span>
+              <h1 className="text-xl font-light tracking-luxury uppercase text-slate-100">
+                Chauffeur <span className="font-bold">Elite</span>
+              </h1>
             </div>
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-full bg-cover bg-center border border-[#514c3e]" style={{ backgroundImage: 'url("https://lh3.googleusercontent.com/aida-public/AB6AXuBdueTnP0AvdQ1MAO-X072TlNMJGI3fmLS0kWTDNjoEfIJZED3_ipBFr2RF_6JfuzSeLzsiF9RZt4qa9Tb5OkHdAIX07u2zkB24DHn9b-QilHSmBdlA8_TfE7fEVHXW6GMckRjxfKz3z3OVBpad7z_bvbS59FR-Ahbnv83hd1cThmtvOkeN89whFK1gkv39sBaODtZDW38hQxh0kpFDUP0-ioZxjl_oTVQCHuFuRT4jkYBd_JafYQKbx3lAXVKXl8nyaaAnJT2oWzOx")' }}></div>
@@ -299,51 +296,9 @@ export default function AccountPage({ params }: AccountPageProps) {
             </section>
 
             <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-              <div className="flex flex-col gap-2 rounded-xl p-6 border border-[#514c3e] bg-[#37342a]/10">
-                <div className="flex justify-between items-start">
-                  <p className="text-slate-400 text-sm font-medium">Total Earned</p>
-                  <span className="material-symbols-outlined text-[#d4af35]">payments</span>
-                </div>
-                <p className="text-white text-3xl font-bold font-display">{bot?.last_match?.price ? `€${bot.last_match.price}` : '€0.00'}</p>
-                <div className="h-12 w-full mt-2 overflow-hidden">
-                  <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 200 60">
-                    <defs>
-                      <linearGradient id="goldGradient" x1="0%" x2="0%" y1="0%" y2="100%">
-                        <stop offset="0%" stopColor="#d4af35" stopOpacity="0.3"></stop>
-                        <stop offset="100%" stopColor="#d4af35" stopOpacity="0"></stop>
-                      </linearGradient>
-                    </defs>
-                    <path d="M0 60 Q 25 40, 50 45 T 100 20 T 150 35 T 200 10 V 60 H 0 Z" fill="url(#goldGradient)"></path>
-                    <path d="M0 60 Q 25 40, 50 45 T 100 20 T 150 35 T 200 10" fill="none" stroke="#d4af35" strokeWidth="1.5"></path>
-                  </svg>
-                </div>
-                <p className="text-emerald-400 text-xs font-medium flex items-center gap-1">
-                  <span className="material-symbols-outlined text-xs">trending_up</span>
-                  +12% from last week
-                </p>
-              </div>
-              <div className="flex flex-col gap-2 rounded-xl p-6 border border-[#514c3e] bg-[#37342a]/10">
-                <div className="flex justify-between items-start">
-                  <p className="text-slate-400 text-sm font-medium">Last Ride Sniped</p>
-                  <span className="material-symbols-outlined text-[#d4af35]">target</span>
-                </div>
-                <p className="text-white text-3xl font-bold font-display">{bot?.last_match ? '1' : '0'}</p>
-                <p className="text-emerald-400 text-xs font-medium flex items-center gap-1">
-                  <span className="material-symbols-outlined text-xs">check_circle</span>
-                  {bot?.last_match ? `ID: ${bot.last_match.offer_id}` : 'No recent activity'}
-                </p>
-              </div>
-              <div className="flex flex-col gap-2 rounded-xl p-6 border border-[#514c3e] bg-[#37342a]/10">
-                <div className="flex justify-between items-start">
-                  <p className="text-slate-400 text-sm font-medium">System status</p>
-                  <span className="material-symbols-outlined text-rose-400">error_outline</span>
-                </div>
-                <p className="text-white text-3xl font-bold font-display">OK</p>
-                <p className="text-emerald-400 text-xs font-medium flex items-center gap-1">
-                  <span className="material-symbols-outlined text-xs">info</span>
-                  All modules operational
-                </p>
-              </div>
+              <ComingSoonCard label="Account revenue analytics will be available here soon." />
+              <ComingSoonCard label="Detailed last-ride statistics will be available here soon." />
+              <ComingSoonCard label="Advanced system health insights will be available here soon." />
             </section>
 
             {/* Bot-specific live log */}
