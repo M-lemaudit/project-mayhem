@@ -76,8 +76,17 @@ export default function AccountPage({ params }: AccountPageProps) {
       setDateStart(String(f.dateStart || f.date_start || ''));
       setDateEnd(String(f.dateEnd || f.date_end || ''));
       setMinGapMinutes(Number(f.minGapMinutes || f.min_gap_minutes || 0));
-      setRideType(String(f.rideType || f.ride_type || 'Both'));
-      setVehicleClasses((f.allowedVehicleTypes || f.vehicle_classes || ['first']) as string[]);
+      const storedRideType = String(f.rideType || f.ride_type || 'Both');
+      const normalizedRideType =
+        storedRideType.toLowerCase() === 'transfer'
+          ? 'Transfer'
+          : storedRideType.toLowerCase() === 'hourly'
+          ? 'Hourly'
+          : 'Both';
+      setRideType(normalizedRideType);
+      setVehicleClasses(
+        (Array.isArray(f.allowedVehicleTypes) ? f.allowedVehicleTypes : []) as string[]
+      );
       setIncludedAirlines((f.includedAirlines || f.included_airlines || []) as string[]);
       setAllowedZipCodes((f.allowedZipCodes || f.allowed_zip_codes || []) as string[]);
       setBlockedZipCodes((f.blockedZipCodes || f.blocked_zip_codes || []) as string[]);
