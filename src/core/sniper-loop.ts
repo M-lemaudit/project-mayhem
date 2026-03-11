@@ -39,6 +39,22 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
       : typeof raw.workingHoursEnd === 'number'
         ? raw.workingHoursEnd
         : DEFAULT_WORKING_HOURS_END;
+
+  // Normalize rideType from Supabase (supports both rideType and ride_type).
+  let normalizedRideType: string | undefined;
+  const rawRideType =
+    (typeof raw.rideType === 'string' && raw.rideType.trim()
+      ? raw.rideType
+      : typeof (raw as Record<string, unknown>).ride_type === 'string'
+        ? (raw as Record<string, unknown>).ride_type
+        : undefined) as string | undefined;
+  if (rawRideType) {
+    const v = rawRideType.trim().toLowerCase();
+    if (v === 'transfer' || v === 'hourly' || v === 'both') {
+      normalizedRideType = v;
+    }
+  }
+
   return {
     minPrice: typeof raw.minPrice === 'number' ? raw.minPrice : 0,
     allowedVehicleTypes: Array.isArray(raw.allowedVehicleTypes)
@@ -52,7 +68,7 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
     workingHoursStart: start,
     workingHoursEnd: end,
     // New Supabase-driven filters
-    ...(typeof raw.rideType === 'string' && raw.rideType.trim() && { rideType: raw.rideType as string }),
+    ...(normalizedRideType && { rideType: normalizedRideType }),
     ...(Array.isArray(raw.includedAirlines) && (raw.includedAirlines as string[]).length > 0 && {
       includedAirlines: raw.includedAirlines as string[],
     }),

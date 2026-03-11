@@ -106,7 +106,7 @@ export default function AccountPage({ params }: AccountPageProps) {
       dateEnd,
       minGapMinutes,
       minLeadHours,
-      rideType,
+      rideType: rideType.trim().toLowerCase(),
       allowedVehicleTypes: vehicleClasses,
       includedAirlines,
       allowedZipCodes,

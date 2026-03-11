@@ -437,29 +437,25 @@ export class FilterEngine {
     }
 
     // ── Ride type (transfer / hourly / both) ─────────────────────
-    const rideType = filters.rideType?.trim().toLowerCase();
+    const rideTypeRaw = filters.rideType;
+    const rideType =
+      typeof rideTypeRaw === 'string' && rideTypeRaw.trim()
+        ? rideTypeRaw.trim().toLowerCase()
+        : '';
     if (rideType && rideType !== 'both') {
+      const bookingTypeSource =
+        typeof attrs?.booking_type === 'string' ? (attrs.booking_type as string) : '';
       const bookingType =
-        typeof attrs?.booking_type === 'string'
-          ? attrs.booking_type.trim().toLowerCase()
+        bookingTypeSource && bookingTypeSource.trim()
+          ? bookingTypeSource.trim().toLowerCase()
           : '';
-      const passedRideType = !bookingType || bookingType === rideType;
-      traceCompare({
-        offerId,
-        filterName: 'rideType',
-        op: '== or empty',
-        leftLabel: 'booking_type',
-        leftValue: bookingType,
-        rightLabel: 'rideType',
-        rightValue: rideType,
-        passed: passedRideType,
-      });
-      if (!passedRideType) {
+
+      if (!bookingType) {
         const res = fail(
           'rideType',
-          `Booking type '${bookingType}' not allowed (user only accepts '${rideType}')`,
+          'Missing booking_type (required for rideType filter)',
           {
-            op: '==',
+            op: '!= ""',
             leftLabel: 'booking_type',
             leftValue: bookingType,
             rightLabel: 'rideType',
@@ -467,6 +463,32 @@ export class FilterEngine {
           }
         );
         if (res) return res;
+      } else {
+        const passedRideType = bookingType === rideType;
+        traceCompare({
+          offerId,
+          filterName: 'rideType',
+          op: '==',
+          leftLabel: 'booking_type',
+          leftValue: bookingType,
+          rightLabel: 'rideType',
+          rightValue: rideType,
+          passed: passedRideType,
+        });
+        if (!passedRideType) {
+          const res = fail(
+            'rideType',
+            `Booking type '${bookingType}' not allowed (user only accepts '${rideType}')`,
+            {
+              op: '==',
+              leftLabel: 'booking_type',
+              leftValue: bookingType,
+              rightLabel: 'rideType',
+              rightValue: rideType,
+            }
+          );
+          if (res) return res;
+        }
       }
     }
 

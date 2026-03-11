@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST="{\"app\\\\dashboard\\\\page.tsx -> @/lib/supabase/client\":{\"id\":\"app\\\\dashboard\\\\page.tsx -> @/lib/supabase/client\",\"files\":[]}}"
+self.__REACT_LOADABLE_MANIFEST="{}"
