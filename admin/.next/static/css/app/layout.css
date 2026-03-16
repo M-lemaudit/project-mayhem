@@ -682,6 +682,9 @@ video {
 .h-6 {
   height: 1.5rem;
 }
+.h-7 {
+  height: 1.75rem;
+}
 .h-8 {
   height: 2rem;
 }
@@ -696,9 +699,6 @@ video {
 }
 .h-px {
   height: 1px;
-}
-.h-7 {
-  height: 1.75rem;
 }
 .max-h-\[90vh\] {
   max-height: 90vh;
@@ -730,14 +730,14 @@ video {
 .w-64 {
   width: 16rem;
 }
+.w-7 {
+  width: 1.75rem;
+}
 .w-9 {
   width: 2.25rem;
 }
 .w-full {
   width: 100%;
-}
-.w-7 {
-  width: 1.75rem;
 }
 .min-w-0 {
   min-width: 0px;
@@ -980,11 +980,18 @@ video {
 .border-rose-500\/20 {
   border-color: rgb(244 63 94 / 0.2);
 }
+.border-rose-500\/40 {
+  border-color: rgb(244 63 94 / 0.4);
+}
 .border-white\/10 {
   border-color: rgb(255 255 255 / 0.1);
 }
 .border-white\/5 {
   border-color: rgb(255 255 255 / 0.05);
+}
+.border-zinc-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(82 82 91 / var(--tw-border-opacity, 1));
 }
 .border-zinc-700 {
   --tw-border-opacity: 1;
@@ -993,13 +1000,6 @@ video {
 .border-zinc-800 {
   --tw-border-opacity: 1;
   border-color: rgb(39 39 42 / var(--tw-border-opacity, 1));
-}
-.border-rose-500\/40 {
-  border-color: rgb(244 63 94 / 0.4);
-}
-.border-zinc-600 {
-  --tw-border-opacity: 1;
-  border-color: rgb(82 82 91 / var(--tw-border-opacity, 1));
 }
 .border-l-\[\#d4af35\] {
   --tw-border-opacity: 1;
@@ -1115,6 +1115,10 @@ video {
 .bg-rose-500\/10 {
   background-color: rgb(244 63 94 / 0.1);
 }
+.bg-rose-600 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(225 29 72 / var(--tw-bg-opacity, 1));
+}
 .bg-slate-500\/10 {
   background-color: rgb(100 116 139 / 0.1);
 }
@@ -1159,10 +1163,6 @@ video {
 .bg-zinc-950 {
   --tw-bg-opacity: 1;
   background-color: rgb(9 9 11 / var(--tw-bg-opacity, 1));
-}
-.bg-rose-600 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(225 29 72 / var(--tw-bg-opacity, 1));
 }
 .bg-gradient-to-b {
   background-image: linear-gradient(to bottom, var(--tw-gradient-stops));
@@ -1338,6 +1338,12 @@ video {
 .text-\[10px\] {
   font-size: 10px;
 }
+.text-\[16px\] {
+  font-size: 16px;
+}
+.text-\[18px\] {
+  font-size: 18px;
+}
 .text-\[8px\] {
   font-size: 8px;
 }
@@ -1363,12 +1369,6 @@ video {
 .text-xs {
   font-size: 0.75rem;
   line-height: 1rem;
-}
-.text-\[16px\] {
-  font-size: 16px;
-}
-.text-\[18px\] {
-  font-size: 18px;
 }
 .font-black {
   font-weight: 900;
@@ -2047,10 +2047,6 @@ body {
 
   .md\:grid-cols-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .md\:grid-cols-3 {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .md\:flex-row {

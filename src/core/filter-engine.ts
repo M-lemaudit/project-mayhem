@@ -551,6 +551,45 @@ export class FilterEngine {
       }
     }
 
+    // ── Working hours for offer start time ────────────────────────
+    if (offerStart != null) {
+      const startHour = filters.workingHoursStart;
+      const endHour = filters.workingHoursEnd;
+      if (typeof startHour === 'number' && typeof endHour === 'number') {
+        const offerLocalHour = offerStart.getHours();
+        const insideWindow =
+          startHour <= endHour
+            ? offerLocalHour >= startHour && offerLocalHour < endHour
+            : offerLocalHour >= startHour || offerLocalHour < endHour;
+
+        traceCompare({
+          offerId,
+          filterName: 'workingHours_offerStart',
+          op: 'inside-window',
+          leftLabel: 'offerLocalHour',
+          leftValue: offerLocalHour,
+          rightLabel: 'window',
+          rightValue: { startHour, endHour },
+          passed: insideWindow,
+        });
+
+        if (!insideWindow) {
+          const res = fail(
+            'workingHours_offerStart',
+            `Offer start hour ${offerLocalHour}:00 outside working window [${startHour}:00–${endHour}:00)`,
+            {
+              op: 'inside-window',
+              leftLabel: 'offerLocalHour',
+              leftValue: offerLocalHour,
+              rightLabel: 'window',
+              rightValue: { startHour, endHour },
+            }
+          );
+          if (res) return res;
+        }
+      }
+    }
+
     // ── Time-gap with existing rides ─────────────────────────────
     const minGap = filters.minGapMinutes;
     if (typeof minGap === 'number' && minGap > 0 && existingRides.length > 0) {

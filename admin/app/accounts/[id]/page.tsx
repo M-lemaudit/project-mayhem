@@ -241,9 +241,6 @@ export default function AccountPage({ params }: AccountPageProps) {
                 Chauffeur <span className="font-bold">Elite</span>
               </h1>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-full bg-cover bg-center border border-[#514c3e]" style={{ backgroundImage: 'url("https://lh3.googleusercontent.com/aida-public/AB6AXuBdueTnP0AvdQ1MAO-X072TlNMJGI3fmLS0kWTDNjoEfIJZED3_ipBFr2RF_6JfuzSeLzsiF9RZt4qa9Tb5OkHdAIX07u2zkB24DHn9b-QilHSmBdlA8_TfE7fEVHXW6GMckRjxfKz3z3OVBpad7z_bvbS59FR-Ahbnv83hd1cThmtvOkeN89whFK1gkv39sBaODtZDW38hQxh0kpFDUP0-ioZxjl_oTVQCHuFuRT4jkYBd_JafYQKbx3lAXVKXl8nyaaAnJT2oWzOx")' }}></div>
-            </div>
           </header>
 
           <main className="flex flex-col flex-1 px-4 md:px-10 py-8 max-w-7xl mx-auto w-full">
@@ -329,8 +326,8 @@ export default function AccountPage({ params }: AccountPageProps) {
                           <span className="text-white font-bold text-lg">Price</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-white font-bold text-sm">€{minPrice} - €{maxPrice}</span>
-                          <span className="text-slate-500 text-xs font-medium">(€0 - €2000)</span>
+                          <span className="text-white font-bold text-sm">${minPrice} - ${maxPrice}</span>
+                          <span className="text-slate-500 text-xs font-medium">($0 - $2000)</span>
                         </div>
                       </div>
 
@@ -749,7 +746,9 @@ export default function AccountPage({ params }: AccountPageProps) {
           </main>
           
           <footer className="mt-auto border-t border-[#514c3e] py-6 px-10 text-center">
-            <p className="text-slate-500 text-xs">© 2024 ChauffeurBot Systems. All automated activities logged for compliance.</p>
+            <p className="text-slate-500 text-xs">
+              © 2026 Chauffeur Elite Systems. All automated activities logged for compliance.
+            </p>
           </footer>
 
           {/* Settings Modal */}

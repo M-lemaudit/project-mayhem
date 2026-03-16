@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Blacklane Sniper Admin',
-  description: 'Admin dashboard for Blacklane Sniper bots',
+  title: 'Chauffeur Elite',
+  description: 'Executive dashboard for Chauffeur Elite accounts',
 };
 
 export default function RootLayout({
