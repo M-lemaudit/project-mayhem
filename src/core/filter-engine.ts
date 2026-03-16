@@ -656,37 +656,65 @@ export class FilterEngine {
     const airportCodes = filters.includedAirlines ?? [];
     if (airportCodes.length > 0) {
       const codesLower = airportCodes.map((c) => c.toLowerCase());
-      const pickupIata = getIata(pickup);
-      const dropoffIata = getIata(dropoff);
+      const pickupIsAirport = isAirportLocation(pickup);
+      const dropoffIsAirport = isAirportLocation(dropoff);
 
-      const matchesIata =
-        (!!pickupIata && codesLower.includes(pickupIata)) ||
-        (!!dropoffIata && codesLower.includes(dropoffIata));
+      if (!pickupIsAirport && !dropoffIsAirport) {
+        if (FILTER_TRACE_ENABLED) {
+          logger.info('[FILTER_TRACE]', {
+            offerId,
+            filter: 'airportIata',
+            op: 'bypass-no-airport',
+            result: 'PASS',
+            message: 'Ride does not involve an airport, bypassing airport filter.',
+          });
+        }
+      } else {
+        const pickupIata = pickupIsAirport ? getIata(pickup) : '';
+        const dropoffIata = dropoffIsAirport ? getIata(dropoff) : '';
 
-      traceCompare({
-        offerId,
-        filterName: 'airportIata',
-        op: 'includes',
-        leftLabel: 'pickup/dropoff IATA',
-        leftValue: { pickupIata, dropoffIata },
-        rightLabel: 'includedAirlines',
-        rightValue: airportCodes,
-        passed: matchesIata,
-      });
+        const pickupAllowed = pickupIsAirport ? !!pickupIata && codesLower.includes(pickupIata) : true;
+        const dropoffAllowed = dropoffIsAirport ? !!dropoffIata && codesLower.includes(dropoffIata) : true;
 
-      if (!matchesIata) {
-        const res = fail(
-          'airportIata',
-          `No matching airport IATA (pickup: ${pickupIata || 'none'}, dropoff: ${dropoffIata || 'none'}, wanted: [${airportCodes.join(', ')}])`,
-          {
-            op: 'includes',
-            leftLabel: 'pickup/dropoff IATA',
-            leftValue: { pickupIata, dropoffIata },
-            rightLabel: 'includedAirlines',
-            rightValue: airportCodes,
-          }
-        );
-        if (res) return res;
+        const matchesIata = pickupAllowed && dropoffAllowed;
+
+        traceCompare({
+          offerId,
+          filterName: 'airportIata',
+          op: 'includes',
+          leftLabel: 'pickup/dropoff IATA',
+          leftValue: {
+            pickupIsAirport,
+            dropoffIsAirport,
+            pickupIata,
+            dropoffIata,
+          },
+          rightLabel: 'includedAirlines',
+          rightValue: airportCodes,
+          passed: matchesIata,
+        });
+
+        if (!matchesIata) {
+          const pickupLabel = pickupIsAirport ? (pickupIata || 'missing') : 'not-airport';
+          const dropoffLabel = dropoffIsAirport ? (dropoffIata || 'missing') : 'not-airport';
+          const res = fail(
+            'airportIata',
+            `Airport IATA not allowed (pickup: ${pickupLabel}, dropoff: ${dropoffLabel}, wanted: [${airportCodes.join(', ')}])`,
+            {
+              op: 'includes',
+              leftLabel: 'pickup/dropoff IATA',
+              leftValue: {
+                pickupIsAirport,
+                dropoffIsAirport,
+                pickupIata,
+                dropoffIata,
+              },
+              rightLabel: 'includedAirlines',
+              rightValue: airportCodes,
+            }
+          );
+          if (res) return res;
+        }
       }
     }
 
@@ -788,6 +816,15 @@ function reject(reason: string): MatchResult {
 function getIata(loc: IncludedResource | null): string {
   const iata = loc?.attributes?.airport_iata;
   return typeof iata === 'string' && iata.trim() ? iata.trim().toLowerCase() : '';
+}
+
+function isAirportLocation(loc: IncludedResource | null): boolean {
+  const tags = loc?.attributes?.tags;
+  if (!Array.isArray(tags)) return false;
+  for (const t of tags) {
+    if (typeof t === 'string' && t.trim().toLowerCase() === 'airport') return true;
+  }
+  return false;
 }
 
 /** Get the lowercase formatted_address_en from an included location. */

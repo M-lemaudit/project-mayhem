@@ -24,7 +24,7 @@ export default function AccountPage({ params }: AccountPageProps) {
   const [minPrice, setMinPrice] = useState(50);
   const [maxPrice, setMaxPrice] = useState(400);
   const [minDistance, setMinDistance] = useState(0);
-  const [maxDistance, setMaxDistance] = useState(1000);
+  const [maxDistance, setMaxDistance] = useState(5000);
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
   const [minGapMinutes, setMinGapMinutes] = useState(0);
@@ -69,10 +69,10 @@ export default function AccountPage({ params }: AccountPageProps) {
 
       // Initialize filters from DB
       const f = botData.filters || {};
-      setMinPrice(Number(f.minPrice || f.min_price || 50));
-      setMaxPrice(Number(f.maxPrice || f.max_price || 400));
-      setMinDistance(Number(f.minDistance || f.min_distance || 0));
-      setMaxDistance(Number(f.maxDistance || f.max_distance || 1000));
+      setMinPrice(Math.min(Number(f.minPrice || f.min_price || 50), 5000));
+      setMaxPrice(Math.min(Number(f.maxPrice || f.max_price || 400), 5000));
+      setMinDistance(Math.min(Number(f.minDistance || f.min_distance || 0), 5000));
+      setMaxDistance(Math.min(Number(f.maxDistance || f.max_distance || 5000), 5000));
       setDateStart(String(f.dateStart || f.date_start || ''));
       setDateEnd(String(f.dateEnd || f.date_end || ''));
       setMinGapMinutes(Number(f.minGapMinutes || f.min_gap_minutes || 0));
@@ -327,7 +327,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-white font-bold text-sm">${minPrice} - ${maxPrice}</span>
-                          <span className="text-slate-500 text-xs font-medium">($0 - $2000)</span>
+                          <span className="text-slate-500 text-xs font-medium">($0 - $5000)</span>
                         </div>
                       </div>
 
@@ -339,8 +339,8 @@ export default function AccountPage({ params }: AccountPageProps) {
                         <div
                           className="absolute h-1 bg-gradient-to-r from-[#d4af35] to-[#f59e0b] rounded-full shadow-[0_0_15px_rgba(212,175,53,0.3)]"
                           style={{
-                            left: `${(minPrice / 2000) * 100}%`,
-                            right: `${100 - (maxPrice / 2000) * 100}%`
+                            left: `${(minPrice / 5000) * 100}%`,
+                            right: `${100 - (maxPrice / 5000) * 100}%`
                           }}
                         ></div>
 
@@ -348,7 +348,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         <input
                           type="range"
                           min="0"
-                          max="2000"
+                          max="5000"
                           value={minPrice}
                           onChange={(e) => {
                             setIsDirty(true);
@@ -361,7 +361,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         <input
                           type="range"
                           min="0"
-                          max="2000"
+                          max="5000"
                           value={maxPrice}
                           onChange={(e) => {
                             setIsDirty(true);
@@ -383,7 +383,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-white font-bold text-sm">{minDistance} km - {maxDistance} km</span>
-                          <span className="text-slate-500 text-xs font-medium">(0 - 1000 km)</span>
+                          <span className="text-slate-500 text-xs font-medium">(0 - 5000 km)</span>
                         </div>
                       </div>
 
@@ -395,8 +395,8 @@ export default function AccountPage({ params }: AccountPageProps) {
                         <div
                           className="absolute h-1 bg-gradient-to-r from-[#d4af35] to-[#f59e0b] rounded-full shadow-[0_0_15px_rgba(212,175,53,0.3)]"
                           style={{
-                            left: `${(minDistance / 1000) * 100}%`,
-                            right: `${100 - (maxDistance / 1000) * 100}%`
+                            left: `${(minDistance / 5000) * 100}%`,
+                            right: `${100 - (maxDistance / 5000) * 100}%`
                           }}
                         ></div>
 
@@ -404,7 +404,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         <input
                           type="range"
                           min="0"
-                          max="1000"
+                          max="5000"
                           value={minDistance}
                           onChange={(e) => {
                             setIsDirty(true);
@@ -417,7 +417,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         <input
                           type="range"
                           min="0"
-                          max="1000"
+                          max="5000"
                           value={maxDistance}
                           onChange={(e) => {
                             setIsDirty(true);
