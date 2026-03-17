@@ -219,14 +219,19 @@ export class BotStateService {
 
     const { data, error } = await supabase
       .from('bots')
-      .select('filters')
+      .select('filters, working_hours')
       .eq('email', this.email)
       .single();
 
     if (error) {
       throw new Error(`BotStateService.getFilters: ${error.message}`);
     }
-    return (data?.filters as Record<string, unknown>) ?? {};
+    const filters = (data?.filters as Record<string, unknown>) ?? {};
+    const workingHours = (data as Record<string, unknown>)?.working_hours;
+    if (workingHours && typeof workingHours === 'object') {
+      return { ...filters, working_hours: workingHours };
+    }
+    return filters;
   }
 
   /** Fetches the current status from the database (for daemon: poll until RUNNING). */

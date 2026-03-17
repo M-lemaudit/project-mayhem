@@ -27,12 +27,18 @@ export interface BotFilters {
   // ── New Supabase-driven filters ──────────────────────────────────
   /** "transfer" | "hourly" | "both" — if empty/missing, accept all. */
   rideType?: string;
-  /** Airport IATA codes the chauffeur wants (e.g. ["MCO"]). Empty = no airport filter. */
-  includedAirlines?: string[];
+  /** Directions where airport legs are allowed: ['pickup'], ['dropoff'], or ['pickup','dropoff']. */
+  allowedAirportDirections?: string[];
+  /** Airline codes allowed when a flight_number is present (e.g. ["DAL","AF"]). Empty = accept all airlines. */
+  allowedAirlines?: string[];
   /** ZIP/postal codes the chauffeur allows. Empty = accept all. */
   allowedZipCodes?: string[];
   /** ZIP/postal codes the chauffeur blocks. Empty = block none. */
   blockedZipCodes?: string[];
+  /** Pickup cities whitelist. Empty = all pickup cities allowed. */
+  allowedPickupCities?: string[];
+  /** Dropoff cities whitelist. Empty = all dropoff cities allowed. */
+  allowedDropoffCities?: string[];
 }
 
 /** Cached ride from Supabase (start_at, end_at as ISO strings). */
@@ -652,139 +658,154 @@ export class FilterEngine {
     // ── Location-based filters (airport & ZIP) ───────────────────
     const { pickup, dropoff } = resolveOfferLocations(offer, included);
 
-    // Airport IATA filter
-    const airportCodes = filters.includedAirlines ?? [];
-    if (airportCodes.length > 0) {
-      const codesLower = airportCodes.map((c) => c.toLowerCase());
+    // Airport direction filter (pickup / dropoff / both)
+    const allowedAirportDirections = Array.isArray(filters.allowedAirportDirections)
+      ? (filters.allowedAirportDirections as string[])
+      : undefined;
+    if (allowedAirportDirections && allowedAirportDirections.length > 0) {
+      const dirs = allowedAirportDirections
+        .map((d) => (typeof d === 'string' ? d.trim().toLowerCase() : ''))
+        .filter((d) => d === 'pickup' || d === 'dropoff');
+
       const pickupIsAirport = isAirportLocation(pickup);
       const dropoffIsAirport = isAirportLocation(dropoff);
 
-      if (!pickupIsAirport && !dropoffIsAirport) {
-        if (FILTER_TRACE_ENABLED) {
-          logger.info('[FILTER_TRACE]', {
-            offerId,
-            filter: 'airportIata',
-            op: 'bypass-no-airport',
-            result: 'PASS',
-            message: 'Ride does not involve an airport, bypassing airport filter.',
-          });
-        }
-      } else {
-        const pickupIata = pickupIsAirport ? getIata(pickup) : '';
-        const dropoffIata = dropoffIsAirport ? getIata(dropoff) : '';
+      const pickupAllowed = !pickupIsAirport || dirs.includes('pickup');
+      const dropoffAllowed = !dropoffIsAirport || dirs.includes('dropoff');
+      const passedAirportDirection = pickupAllowed && dropoffAllowed;
 
-        const pickupAllowed = pickupIsAirport ? !!pickupIata && codesLower.includes(pickupIata) : true;
-        const dropoffAllowed = dropoffIsAirport ? !!dropoffIata && codesLower.includes(dropoffIata) : true;
+      traceCompare({
+        offerId,
+        filterName: 'airportDirection',
+        op: 'allowed-directions',
+        leftLabel: 'legs',
+        leftValue: { pickupIsAirport, dropoffIsAirport },
+        rightLabel: 'allowedAirportDirections',
+        rightValue: dirs,
+        passed: passedAirportDirection,
+      });
 
-        const matchesIata = pickupAllowed && dropoffAllowed;
-
-        traceCompare({
-          offerId,
-          filterName: 'airportIata',
-          op: 'includes',
-          leftLabel: 'pickup/dropoff IATA',
-          leftValue: {
-            pickupIsAirport,
-            dropoffIsAirport,
-            pickupIata,
-            dropoffIata,
-          },
-          rightLabel: 'includedAirlines',
-          rightValue: airportCodes,
-          passed: matchesIata,
+      if (!passedAirportDirection) {
+        const reason = !pickupAllowed
+          ? 'Pickup airport not allowed by airportDirection filter'
+          : 'Dropoff airport not allowed by airportDirection filter';
+        const res = fail('airportDirection', reason, {
+          op: 'allowed-directions',
+          leftLabel: 'legs',
+          leftValue: { pickupIsAirport, dropoffIsAirport },
+          rightLabel: 'allowedAirportDirections',
+          rightValue: dirs,
         });
-
-        if (!matchesIata) {
-          const pickupLabel = pickupIsAirport ? (pickupIata || 'missing') : 'not-airport';
-          const dropoffLabel = dropoffIsAirport ? (dropoffIata || 'missing') : 'not-airport';
-          const res = fail(
-            'airportIata',
-            `Airport IATA not allowed (pickup: ${pickupLabel}, dropoff: ${dropoffLabel}, wanted: [${airportCodes.join(', ')}])`,
-            {
-              op: 'includes',
-              leftLabel: 'pickup/dropoff IATA',
-              leftValue: {
-                pickupIsAirport,
-                dropoffIsAirport,
-                pickupIata,
-                dropoffIata,
-              },
-              rightLabel: 'includedAirlines',
-              rightValue: airportCodes,
-            }
-          );
-          if (res) return res;
-        }
+        if (res) return res;
       }
     }
 
-    // Allowed ZIP codes
-    const allowedZips = filters.allowedZipCodes ?? [];
-    if (allowedZips.length > 0) {
-      const pickupAddr = getFormattedAddress(pickup);
-      const dropoffAddr = getFormattedAddress(dropoff);
-      const matchesZip = allowedZips.some(
-        (zip) => pickupAddr.includes(zip) || dropoffAddr.includes(zip)
+    // Airline filter based on flight_number
+    const allowedAirlines = Array.isArray(filters.allowedAirlines)
+      ? (filters.allowedAirlines as string[])
+      : undefined;
+    const flightNumberRaw = attrs?.flight_number;
+    const flightNumber =
+      typeof flightNumberRaw === 'string' && flightNumberRaw.trim()
+        ? flightNumberRaw.trim().toUpperCase()
+        : '';
+
+    if (flightNumber && allowedAirlines && allowedAirlines.length > 0) {
+      const allowedUpper = allowedAirlines
+        .map((c) => (typeof c === 'string' ? c.trim().toUpperCase() : ''))
+        .filter((c) => c.length > 0);
+
+      const matched = allowedUpper.some(
+        (code) => flightNumber.startsWith(code) || flightNumber.includes(code)
       );
 
       traceCompare({
         offerId,
-        filterName: 'allowedZipCodes',
-        op: 'some(includes)',
-        leftLabel: 'pickup/dropoff',
-        leftValue: { pickupAddr, dropoffAddr },
-        rightLabel: 'allowedZipCodes',
-        rightValue: allowedZips,
-        passed: matchesZip,
+        filterName: 'allowedAirlines',
+        op: 'startsWith/includes',
+        leftLabel: 'flight_number',
+        leftValue: flightNumber,
+        rightLabel: 'allowedAirlines',
+        rightValue: allowedUpper,
+        passed: matched,
       });
 
-      if (!matchesZip) {
+      if (!matched) {
         const res = fail(
-          'allowedZipCodes',
-          `Route does not match any allowed ZIP code [${allowedZips.join(', ')}]`,
+          'allowedAirlines',
+          `Flight number '${flightNumber}' not allowed by allowedAirlines filter`,
           {
-            op: 'some(includes)',
-            leftLabel: 'pickup/dropoff',
-            leftValue: { pickupAddr, dropoffAddr },
-            rightLabel: 'allowedZipCodes',
-            rightValue: allowedZips,
+            op: 'startsWith/includes',
+            leftLabel: 'flight_number',
+            leftValue: flightNumber,
+            rightLabel: 'allowedAirlines',
+            rightValue: allowedUpper,
           }
         );
         if (res) return res;
       }
     }
 
-    // Blocked ZIP codes
-    const blockedZips = filters.blockedZipCodes ?? [];
-    if (blockedZips.length > 0) {
-      const pickupAddr = getFormattedAddress(pickup);
-      const dropoffAddr = getFormattedAddress(dropoff);
-      const blocked = blockedZips.find(
-        (zip) => pickupAddr.includes(zip) || dropoffAddr.includes(zip)
-      );
-      const passedBlocked = !blocked;
+    // Pickup / dropoff city whitelists
+    const pickupCity = getCity(pickup);
+    const dropoffCity = getCity(dropoff);
 
+    const allowedPickupCities = (filters.allowedPickupCities ?? []).map((c) =>
+      typeof c === 'string' ? c.trim().toLowerCase() : ''
+    ).filter(Boolean);
+    if (allowedPickupCities.length > 0) {
+      const pickupAllowed = allowedPickupCities.includes(pickupCity);
       traceCompare({
         offerId,
-        filterName: 'blockedZipCodes',
-        op: 'none(includes)',
-        leftLabel: 'pickup/dropoff',
-        leftValue: { pickupAddr, dropoffAddr },
-        rightLabel: 'blockedZipCodes',
-        rightValue: blockedZips,
-        passed: passedBlocked,
+        filterName: 'allowedPickupCities',
+        op: 'includes',
+        leftLabel: 'pickupCity',
+        leftValue: pickupCity,
+        rightLabel: 'allowedPickupCities',
+        rightValue: allowedPickupCities,
+        passed: pickupAllowed,
       });
-
-      if (blocked) {
+      if (!pickupAllowed) {
         const res = fail(
-          'blockedZipCodes',
-          `Route includes blocked ZIP code '${blocked}'`,
+          'allowedPickupCities',
+          `Pickup city '${pickupCity || 'unknown'}' not in allowedPickupCities [${allowedPickupCities.join(', ')}]`,
           {
-            op: 'none(includes)',
-            leftLabel: 'pickup/dropoff',
-            leftValue: { pickupAddr, dropoffAddr },
-            rightLabel: 'blockedZipCodes',
-            rightValue: blockedZips,
+            op: 'includes',
+            leftLabel: 'pickupCity',
+            leftValue: pickupCity,
+            rightLabel: 'allowedPickupCities',
+            rightValue: allowedPickupCities,
+          }
+        );
+        if (res) return res;
+      }
+    }
+
+    const allowedDropoffCities = (filters.allowedDropoffCities ?? []).map((c) =>
+      typeof c === 'string' ? c.trim().toLowerCase() : ''
+    ).filter(Boolean);
+    if (allowedDropoffCities.length > 0) {
+      const dropoffAllowed = allowedDropoffCities.includes(dropoffCity);
+      traceCompare({
+        offerId,
+        filterName: 'allowedDropoffCities',
+        op: 'includes',
+        leftLabel: 'dropoffCity',
+        leftValue: dropoffCity,
+        rightLabel: 'allowedDropoffCities',
+        rightValue: allowedDropoffCities,
+        passed: dropoffAllowed,
+      });
+      if (!dropoffAllowed) {
+        const res = fail(
+          'allowedDropoffCities',
+          `Dropoff city '${dropoffCity || 'unknown'}' not in allowedDropoffCities [${allowedDropoffCities.join(', ')}]`,
+          {
+            op: 'includes',
+            leftLabel: 'dropoffCity',
+            leftValue: dropoffCity,
+            rightLabel: 'allowedDropoffCities',
+            rightValue: allowedDropoffCities,
           }
         );
         if (res) return res;
@@ -831,4 +852,10 @@ function isAirportLocation(loc: IncludedResource | null): boolean {
 function getFormattedAddress(loc: IncludedResource | null): string {
   const addr = loc?.attributes?.formatted_address_en;
   return typeof addr === 'string' ? addr.toLowerCase() : '';
+}
+
+/** Get the lowercase city from an included location, or empty string. */
+function getCity(loc: IncludedResource | null): string {
+  const city = loc?.attributes?.city;
+  return typeof city === 'string' ? city.trim().toLowerCase() : '';
 }

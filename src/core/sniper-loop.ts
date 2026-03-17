@@ -69,15 +69,46 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
     workingHoursEnd: end,
     // New Supabase-driven filters
     ...(normalizedRideType && { rideType: normalizedRideType }),
-    ...(Array.isArray(raw.includedAirlines) && (raw.includedAirlines as string[]).length > 0 && {
-      includedAirlines: raw.includedAirlines as string[],
-    }),
-    ...(Array.isArray(raw.allowedZipCodes) && (raw.allowedZipCodes as string[]).length > 0 && {
-      allowedZipCodes: raw.allowedZipCodes as string[],
-    }),
-    ...(Array.isArray(raw.blockedZipCodes) && (raw.blockedZipCodes as string[]).length > 0 && {
-      blockedZipCodes: raw.blockedZipCodes as string[],
-    }),
+    // Airport direction: ['pickup'], ['dropoff'], or both; default handled in filter-engine when undefined.
+    ...(Array.isArray((raw as any).allowedAirportDirections) &&
+      (raw as any).allowedAirportDirections.length > 0 && {
+        allowedAirportDirections: (raw as any).allowedAirportDirections as string[],
+      }),
+    // Allowed airlines: prefer new field, fallback to legacy includedAirlines.
+    ...(Array.isArray((raw as any).allowedAirlines) &&
+      (raw as any).allowedAirlines.length > 0 && {
+        allowedAirlines: ((raw as any).allowedAirlines as string[]).map((c) =>
+          typeof c === 'string' ? c.trim().toUpperCase() : ''
+        ),
+      }),
+    ...(!Array.isArray((raw as any).allowedAirlines) ||
+    (raw as any).allowedAirlines.length === 0
+      ? Array.isArray((raw as any).includedAirlines) &&
+        (raw as any).includedAirlines.length > 0 && {
+          allowedAirlines: ((raw as any).includedAirlines as string[]).map((c) =>
+            typeof c === 'string' ? c.trim().toUpperCase() : ''
+          ),
+        }
+      : {}),
+    // City filters: split into pickup/dropoff; fallback to legacy allowedZipCodes/blockedZipCodes.
+    ...(Array.isArray((raw as any).allowedPickupCities) &&
+      (raw as any).allowedPickupCities.length > 0 && {
+        allowedPickupCities: (raw as any).allowedPickupCities as string[],
+      }),
+    ...(Array.isArray((raw as any).allowedDropoffCities) &&
+      (raw as any).allowedDropoffCities.length > 0 && {
+        allowedDropoffCities: (raw as any).allowedDropoffCities as string[],
+      }),
+    ...((!Array.isArray((raw as any).allowedPickupCities) ||
+      (raw as any).allowedPickupCities.length === 0) &&
+    (!Array.isArray((raw as any).allowedDropoffCities) ||
+      (raw as any).allowedDropoffCities.length === 0)
+      ? Array.isArray((raw as any).allowedZipCodes) &&
+        (raw as any).allowedZipCodes.length > 0 && {
+          allowedPickupCities: (raw as any).allowedZipCodes as string[],
+          allowedDropoffCities: (raw as any).allowedZipCodes as string[],
+        }
+      : {}),
   };
 }
 
@@ -130,7 +161,7 @@ function getOfferPickupIso(offer: OfferShape): string | undefined {
 function logRawOffersResponse(prefix: string, data: unknown, offers: OfferShape[]): void {
   if (offers.length > 0) {
     const first = offers[0] as Record<string, unknown>;
-    console.log(`${prefix} (debug) 1ère offre clés:`, Object.keys(first).join(', '));
+    console.log(`${prefix} (debug) first offer keys:`, Object.keys(first).join(', '));
   }
 }
 
@@ -246,15 +277,17 @@ export class SniperLoop {
     }
 
     if (this.timezoneId) {
-      console.log(`${this.logPrefix} Heure client: ${formatNowInTimezone(this.timezoneId)}`);
+      console.log(`${this.logPrefix} Client time: ${formatNowInTimezone(this.timezoneId)}`);
     } else {
-      console.log(`${this.logPrefix} Heure client: ${new Date().toLocaleString('fr-FR')} (server local, pas de timezone)`);
+      console.log(
+        `${this.logPrefix} Client time: ${new Date().toLocaleString('fr-FR')} (server local, no timezone configured)`
+      );
     }
 
     let unsubscribeRealtime: (() => void) | undefined;
     if (this.botState) {
       unsubscribeRealtime = this.botState.subscribeToRemoteStop(() => {
-        console.log(`${this.logPrefix} Stop reçu (dashboard) → arrêt.`);
+        console.log(`${this.logPrefix} Stop received from dashboard → stopping loop.`);
         this.isRunning = false;
       });
     }
@@ -274,7 +307,7 @@ export class SniperLoop {
           if (this.botState) {
             const status = await this.botState.getStatus();
             if (status === 'STOPPED') {
-              console.log(`${this.logPrefix} Stop (dashboard) → arrêt.`);
+              console.log(`${this.logPrefix} Stop received from dashboard → stopping loop.`);
               this.isRunning = false;
               break;
             }
@@ -399,7 +432,9 @@ export class SniperLoop {
                   }
                 }
                 const rideDateTime = formatRideDateTime(pickupAt, this.timezoneId);
-                console.log(`${this.logPrefix} 🎯 Offer ${idStr} handled. Course: ${rideDateTime}. Entering cooldown before next scan...`);
+                console.log(
+                  `${this.logPrefix} 🎯 Offer ${idStr} booked. Ride time: ${rideDateTime}. Entering cooldown before next scan...`
+                );
                 hadMatchThisCycle = true;
                 break;
               }
@@ -413,7 +448,7 @@ export class SniperLoop {
             await sleep(cooldownMs);
           }
 
-          console.log(`${this.logPrefix} Cycle ${cycleCount}: ${offers.length} offre(s).`);
+          console.log(`${this.logPrefix} Cycle ${cycleCount}: ${offers.length} offer(s).`);
 
           if (this.botState && cycleCount % HEARTBEAT_INTERVAL_CYCLES === 0) {
             await this.botState.updateHeartbeat();
@@ -424,7 +459,7 @@ export class SniperLoop {
           await randomSleep(sniper_delay_min_ms, sniper_delay_max_ms);
         } catch (err) {
           if (err instanceof TokenExpiredError) {
-            console.log(`${this.logPrefix} Session expirée.`);
+            console.log(`${this.logPrefix} Session expired.`);
             if (this.botState) {
               await this.botState.saveSession({}).catch(() => {});
               await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
@@ -438,7 +473,7 @@ export class SniperLoop {
             const rateLimitEnd = Date.now() + backoffSeconds * 1000;
             const resumeAt = new Date(rateLimitEnd);
             console.log(
-              `${this.logPrefix} Rate limit → pause ${backoffSeconds}s (reprise à ${resumeAt.toLocaleTimeString()}, Stop vérifié toutes les 8 s).`
+              `${this.logPrefix} Rate limit hit → pausing for ${backoffSeconds}s (resume at ${resumeAt.toLocaleTimeString()}, stop checked every 8s).`
             );
             if (this.botState) await this.botState.updateStatus('PAUSED_RATE_LIMIT').catch(() => {});
 
@@ -450,7 +485,7 @@ export class SniperLoop {
               if (this.botState) {
                 const status = await this.botState.getStatus();
                 if (status === 'STOPPED') {
-                  console.log(`${this.logPrefix} Stop (dashboard) → arrêt.`);
+                  console.log(`${this.logPrefix} Stop received from dashboard → stopping loop.`);
                   this.isRunning = false;
                   break;
                 }
@@ -458,7 +493,7 @@ export class SniperLoop {
             }
 
             if (!this.isRunning) break;
-            console.log(`${this.logPrefix} Pause rate limit terminée → reprise.`);
+            console.log(`${this.logPrefix} Rate limit pause finished → resuming.`);
             const status = this.botState ? await this.botState.getStatus() : 'RUNNING';
             if (status !== 'STOPPED' && this.botState) {
               await this.botState.updateStatus('RUNNING').catch(() => {});
@@ -466,11 +501,14 @@ export class SniperLoop {
           } else if (err instanceof InvalidOfferStateError) {
             const message = err instanceof Error && err.message ? err.message : 'invalid offer state (410)';
             console.log(
-              `${this.logPrefix} Offre non acceptée (état invalide / déjà prise). On continue le sniper loop. Détail: ${message}`
+              `${this.logPrefix} Offer not accepted (invalid state / already taken). Continuing sniper loop. Detail: ${message}`
             );
-            logger.info(`${this.logPrefix} Offer could not be accepted due to invalid state; continuing loop.`, {
-              error: message,
-            });
+            logger.info(
+              `${this.logPrefix} Offer could not be accepted due to invalid state; continuing loop.`,
+              {
+                error: message,
+              }
+            );
           } else {
             console.error(`${this.logPrefix} Erreur cycle:`, err);
             if (this.botState) await this.botState.updateStatus('ERROR_AUTH').catch(() => {});

@@ -1826,10 +1826,6 @@ body {
   background-color: rgb(244 63 94 / var(--tw-bg-opacity, 1));
 }
 
-.hover\:bg-rose-500\/20:hover {
-  background-color: rgb(244 63 94 / 0.2);
-}
-
 .hover\:bg-white\/\[0\.03\]:hover {
   background-color: rgb(255 255 255 / 0.03);
 }
@@ -1881,10 +1877,6 @@ body {
 .focus\:border-\[\#d4af35\]:focus {
   --tw-border-opacity: 1;
   border-color: rgb(212 175 53 / var(--tw-border-opacity, 1));
-}
-
-.focus\:border-\[\#rose-400\]:focus {
-  border-color: #rose-400;
 }
 
 .focus\:border-emerald-500:focus {

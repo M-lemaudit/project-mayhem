@@ -31,11 +31,12 @@ export default function AccountPage({ params }: AccountPageProps) {
   const [rideType, setRideType] = useState('Both');
   const [vehicleClasses, setVehicleClasses] = useState<string[]>(['first']);
   const [airlineCode, setAirlineCode] = useState('');
-  const [includedAirlines, setIncludedAirlines] = useState<string[]>([]);
-  const [zipCodeInputAccept, setZipCodeInputAccept] = useState('');
-  const [allowedZipCodes, setAllowedZipCodes] = useState<string[]>([]);
-  const [zipCodeInputBlock, setZipCodeInputBlock] = useState('');
-  const [blockedZipCodes, setBlockedZipCodes] = useState<string[]>([]);
+  const [allowedAirlines, setAllowedAirlines] = useState<string[]>([]);
+  const [airportDirection, setAirportDirection] = useState<'both' | 'pickup' | 'dropoff'>('both');
+  const [pickupCityInput, setPickupCityInput] = useState('');
+  const [allowedPickupCities, setAllowedPickupCities] = useState<string[]>([]);
+  const [dropoffCityInput, setDropoffCityInput] = useState('');
+  const [allowedDropoffCities, setAllowedDropoffCities] = useState<string[]>([]);
   const [minLeadHours, setMinLeadHours] = useState(24);
   const [timezone, setTimezone] = useState('Europe/Paris');
   const [workingHours, setWorkingHours] = useState({ start: 6, end: 22 });
@@ -87,9 +88,39 @@ export default function AccountPage({ params }: AccountPageProps) {
       setVehicleClasses(
         (Array.isArray(f.allowedVehicleTypes) ? f.allowedVehicleTypes : []) as string[]
       );
-      setIncludedAirlines((f.includedAirlines || f.included_airlines || []) as string[]);
-      setAllowedZipCodes((f.allowedZipCodes || f.allowed_zip_codes || []) as string[]);
-      setBlockedZipCodes((f.blockedZipCodes || f.blocked_zip_codes || []) as string[]);
+      const dirRaw = (f.allowedAirportDirections || f.allowed_airport_directions) as
+        | string[]
+        | undefined;
+      if (Array.isArray(dirRaw) && dirRaw.length > 0) {
+        const norm = dirRaw
+          .map((d) => (typeof d === 'string' ? d.trim().toLowerCase() : ''))
+          .filter((d) => d === 'pickup' || d === 'dropoff');
+        if (norm.length === 1 && norm[0] === 'pickup') setAirportDirection('pickup');
+        else if (norm.length === 1 && norm[0] === 'dropoff') setAirportDirection('dropoff');
+        else setAirportDirection('both');
+      } else {
+        setAirportDirection('both');
+      }
+      const airlinesRaw =
+        (f.allowedAirlines as string[] | undefined) ??
+        (f.allowed_airlines as string[] | undefined) ??
+        (f.includedAirlines as string[] | undefined) ??
+        (f.included_airlines as string[] | undefined);
+      setAllowedAirlines(
+        Array.isArray(airlinesRaw)
+          ? airlinesRaw.map((c) => (typeof c === 'string' ? c.trim().toUpperCase() : '')).filter(Boolean)
+          : []
+      );
+      setAllowedPickupCities(
+        (Array.isArray(f.allowedPickupCities)
+          ? f.allowedPickupCities
+          : (f.allowedZipCodes || f.allowed_zip_codes || [])) as string[]
+      );
+      setAllowedDropoffCities(
+        (Array.isArray(f.allowedDropoffCities)
+          ? f.allowedDropoffCities
+          : (f.allowedZipCodes || f.allowed_zip_codes || [])) as string[]
+      );
       setMinLeadHours(Number(f.minLeadHours || f.min_lead_hours || 24));
 
       // Bot level settings
@@ -119,9 +150,15 @@ export default function AccountPage({ params }: AccountPageProps) {
       minLeadHours,
       rideType: rideType.trim().toLowerCase(),
       allowedVehicleTypes: vehicleClasses,
-      includedAirlines,
-      allowedZipCodes,
-      blockedZipCodes,
+      allowedAirportDirections:
+        airportDirection === 'both'
+          ? ['pickup', 'dropoff']
+          : airportDirection === 'pickup'
+          ? ['pickup']
+          : ['dropoff'],
+      allowedAirlines,
+      allowedPickupCities,
+      allowedDropoffCities,
     };
 
     const { error } = await supabase
@@ -186,42 +223,45 @@ export default function AccountPage({ params }: AccountPageProps) {
   };
 
   const addAirline = () => {
-    if (airlineCode && !includedAirlines.includes(airlineCode.toUpperCase())) {
+    const code = airlineCode.trim().toUpperCase();
+    if (code && !allowedAirlines.includes(code)) {
       setIsDirty(true);
-      setIncludedAirlines([...includedAirlines, airlineCode.toUpperCase()]);
+      setAllowedAirlines([...allowedAirlines, code]);
       setAirlineCode('');
     }
   };
 
   const removeAirline = (code: string) => {
     setIsDirty(true);
-    setIncludedAirlines(includedAirlines.filter(c => c !== code));
+    setAllowedAirlines(allowedAirlines.filter(c => c !== code));
   };
 
-  const addZipCodeAccept = () => {
-    if (zipCodeInputAccept && !allowedZipCodes.includes(zipCodeInputAccept.trim())) {
+  const addPickupCity = () => {
+    const city = pickupCityInput.trim();
+    if (city && !allowedPickupCities.includes(city)) {
       setIsDirty(true);
-      setAllowedZipCodes([...allowedZipCodes, zipCodeInputAccept.trim()]);
-      setZipCodeInputAccept('');
+      setAllowedPickupCities([...allowedPickupCities, city]);
+      setPickupCityInput('');
     }
   };
 
-  const removeZipCodeAccept = (code: string) => {
+  const removePickupCity = (city: string) => {
     setIsDirty(true);
-    setAllowedZipCodes(allowedZipCodes.filter(c => c !== code));
+    setAllowedPickupCities(allowedPickupCities.filter((c) => c !== city));
   };
 
-  const addZipCodeBlock = () => {
-    if (zipCodeInputBlock && !blockedZipCodes.includes(zipCodeInputBlock.trim())) {
+  const addDropoffCity = () => {
+    const city = dropoffCityInput.trim();
+    if (city && !allowedDropoffCities.includes(city)) {
       setIsDirty(true);
-      setBlockedZipCodes([...blockedZipCodes, zipCodeInputBlock.trim()]);
-      setZipCodeInputBlock('');
+      setAllowedDropoffCities([...allowedDropoffCities, city]);
+      setDropoffCityInput('');
     }
   };
 
-  const removeZipCodeBlock = (code: string) => {
+  const removeDropoffCity = (city: string) => {
     setIsDirty(true);
-    setBlockedZipCodes(blockedZipCodes.filter(c => c !== code));
+    setAllowedDropoffCities(allowedDropoffCities.filter((c) => c !== city));
   };
 
   if (loading) {
@@ -607,36 +647,87 @@ export default function AccountPage({ params }: AccountPageProps) {
                   </div>
                 </div>
 
-                {/* Include Pickup Airline Codes */}
+                {/* Airport & Airline Filters */}
                 <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="material-symbols-outlined text-[#d4af35]">flight_takeoff</span>
-                    <h3 className="text-white text-lg font-bold">Include Pickup Airline Codes</h3>
+                    <h3 className="text-white text-lg font-bold">Airport & Airline Rules</h3>
                   </div>
-                  <p className="text-slate-400 text-xs mb-6">The bot will ONLY accept rides for these codes (leave empty for all).</p>
-                  <div className="space-y-4">
+                  <p className="text-slate-400 text-xs mb-6">
+                    Control which airport legs are allowed (pickup / dropoff) and which airlines are accepted for flights.
+                  </p>
+                  <div className="space-y-6">
                     <div className="flex flex-col gap-2">
-                      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Add Airline Code</label>
-                      <form onSubmit={(e) => { e.preventDefault(); addAirline(); }} className="flex gap-2">
+                      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        Airport Direction
+                      </label>
+                      <select
+                        value={
+                          airportDirection === 'pickup'
+                            ? 'pickup'
+                            : airportDirection === 'dropoff'
+                            ? 'dropoff'
+                            : 'both'
+                        }
+                        onChange={(e) => {
+                          setIsDirty(true);
+                          const v = e.target.value;
+                          if (v === 'pickup' || v === 'dropoff') setAirportDirection(v);
+                          else setAirportDirection('both');
+                        }}
+                        className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-white focus:border-[#d4af35] outline-none"
+                      >
+                        <option value="both">Allow airport on pickup & dropoff</option>
+                        <option value="pickup">Allow airport on pickup only</option>
+                        <option value="dropoff">Allow airport on dropoff only</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        Allowed Airlines (flight codes)
+                      </label>
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          addAirline();
+                        }}
+                        className="flex gap-2"
+                      >
                         <input
                           value={airlineCode}
                           onChange={(e) => setAirlineCode(e.target.value)}
                           className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                          placeholder="Enter code (e.g., EK, AT, LH)" type="text"
+                          placeholder="Enter code (e.g., EK, AF, LH)"
+                          type="text"
                         />
-                        <button type="submit" className="px-4 py-2 bg-[#37342a]/50 border border-[#514c3e] rounded-lg text-sm font-bold text-slate-300 hover:bg-[#37342a]">Add</button>
+                        <button
+                          type="submit"
+                          className="px-4 py-2 bg-[#37342a]/50 border border-[#514c3e] rounded-lg text-sm font-bold text-slate-300 hover:bg-[#37342a]"
+                        >
+                          Add
+                        </button>
                       </form>
                     </div>
-                    {includedAirlines.length === 0 ? (
+                    {allowedAirlines.length === 0 ? (
                       <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                        <p className="text-xs text-slate-500 italic">No airline codes included. Bot will check all airlines.</p>
+                        <p className="text-xs text-slate-500 italic">
+                          No airline codes configured. Bot will accept all airlines when a flight number is present.
+                        </p>
                       </div>
                     ) : (
                       <div className="flex flex-wrap gap-2">
-                        {includedAirlines.map(code => (
-                          <div key={code} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-[#514c3e] rounded-lg text-xs">
+                        {allowedAirlines.map((code) => (
+                          <div
+                            key={code}
+                            className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-[#514c3e] rounded-lg text-xs"
+                          >
                             <span className="font-bold text-slate-200">{code}</span>
-                            <button onClick={() => removeAirline(code)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
+                            <button
+                              onClick={() => removeAirline(code)}
+                              className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400"
+                            >
+                              close
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -644,67 +735,67 @@ export default function AccountPage({ params }: AccountPageProps) {
                   </div>
                 </div>
 
-                {/* Zip Code Management */}
+                {/* City Management (Pickup / Dropoff) */}
                 <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="material-symbols-outlined text-[#d4af35]">pincode</span>
-                    <h3 className="text-white text-lg font-bold">Zip Code Management</h3>
+                    <h3 className="text-white text-lg font-bold">City Management</h3>
                   </div>
-                  <p className="text-slate-400 text-xs mb-8">Whitelist or blacklist offers based on pickup or drop-off zip codes.</p>
+                  <p className="text-slate-400 text-xs mb-8">Restrict offers based on pickup and drop-off city. Empty lists mean all cities are allowed for that direction.</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-4">
                       <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
                         <span className="material-symbols-outlined text-sm">verified</span>
-                        Allowed Zip Codes (Whitelist)
+                        Allowed Pickup Cities
                       </label>
-                      <form onSubmit={(e) => { e.preventDefault(); addZipCodeAccept(); }} className="flex gap-2">
+                      <form onSubmit={(e) => { e.preventDefault(); addPickupCity(); }} className="flex gap-2">
                         <input
-                          value={zipCodeInputAccept}
-                          onChange={(e) => setZipCodeInputAccept(e.target.value)}
+                          value={pickupCityInput}
+                          onChange={(e) => setPickupCityInput(e.target.value)}
                           className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                          placeholder="Enter zip code" type="text"
+                          placeholder="Enter pickup city (e.g. Orlando)" type="text"
                         />
                         <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
                       </form>
-                      {allowedZipCodes.length === 0 ? (
+                      {allowedPickupCities.length === 0 ? (
                         <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No zip codes whitelisted.</p>
+                          <p className="text-xs text-slate-500 italic">No pickup cities configured. All pickup cities are allowed.</p>
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-2">
-                          {allowedZipCodes.map(code => (
-                            <div key={code} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
-                              <span className="text-emerald-400 font-medium">{code}</span>
-                              <button onClick={() => removeZipCodeAccept(code)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
+                          {allowedPickupCities.map(city => (
+                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
+                              <span className="text-emerald-400 font-medium">{city}</span>
+                              <button onClick={() => removePickupCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
                             </div>
                           ))}
                         </div>
                       )}
                     </div>
                     <div className="space-y-4">
-                      <label className="text-sm font-semibold text-rose-400 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-sm">block</span>
-                        Blocked Zip Codes (Blacklist)
+                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-sm">verified</span>
+                        Allowed Dropoff Cities
                       </label>
-                      <form onSubmit={(e) => { e.preventDefault(); addZipCodeBlock(); }} className="flex gap-2">
+                      <form onSubmit={(e) => { e.preventDefault(); addDropoffCity(); }} className="flex gap-2">
                         <input
-                          value={zipCodeInputBlock}
-                          onChange={(e) => setZipCodeInputBlock(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#rose-400]"
-                          placeholder="Enter zip code" type="text"
+                          value={dropoffCityInput}
+                          onChange={(e) => setDropoffCityInput(e.target.value)}
+                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                          placeholder="Enter dropoff city (e.g. Orlando)" type="text"
                         />
-                        <button type="submit" className="px-4 py-2 bg-rose-500/10 border border-rose-500/20 rounded-lg text-sm font-bold text-rose-400 hover:bg-rose-500/20">Block</button>
+                        <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
                       </form>
-                      {blockedZipCodes.length === 0 ? (
+                      {allowedDropoffCities.length === 0 ? (
                         <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No zip codes blacklisted.</p>
+                          <p className="text-xs text-slate-500 italic">No dropoff cities configured. All dropoff cities are allowed.</p>
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-2">
-                          {blockedZipCodes.map(code => (
-                            <div key={code} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-rose-500/20 rounded-lg text-xs">
-                              <span className="text-rose-400 font-medium">{code}</span>
-                              <button onClick={() => removeZipCodeBlock(code)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
+                          {allowedDropoffCities.map(city => (
+                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
+                              <span className="text-emerald-400 font-medium">{city}</span>
+                              <button onClick={() => removeDropoffCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
                             </div>
                           ))}
                         </div>

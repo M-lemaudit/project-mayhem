@@ -1,5 +1,5 @@
 /**
- * Manual script: exercise airport filter edge-cases (bypass + validation).
+ * Manual script: exercise airportDirection + allowedAirlines filters.
  * Run: npm run build && node dist/scripts/test-airport-filter.js
  */
 import { FilterEngine, type BotFilters, type IncludedResource, type OfferShape } from '../core/filter-engine';
@@ -8,11 +8,15 @@ function makeOffer(
   id: string,
   pickupId: string,
   dropoffId: string,
-  price: string = '10'
+  price: string = '10',
+  flightNumber?: string
 ): OfferShape {
   return {
     id,
-    attributes: { price },
+    attributes: {
+      price,
+      ...(flightNumber ? { flight_number: flightNumber } : {}),
+    },
     relationships: {
       pickup_location: { data: { id: pickupId } },
       dropoff_location: { data: { id: dropoffId } },
@@ -24,16 +28,14 @@ function makeLocation(
   id: string,
   {
     tags,
-    airport_iata,
     formatted_address_en,
-  }: { tags?: unknown; airport_iata?: unknown; formatted_address_en?: unknown }
+  }: { tags?: unknown; formatted_address_en?: unknown }
 ): IncludedResource {
   return {
     id,
     type: 'locations',
     attributes: {
       ...(tags !== undefined ? { tags } : {}),
-      ...(airport_iata !== undefined ? { airport_iata } : {}),
       ...(formatted_address_en !== undefined ? { formatted_address_en } : {}),
     },
   };
@@ -53,12 +55,13 @@ async function main(): Promise<void> {
   const baseFilters: BotFilters = {
     minPrice: 0,
     allowedVehicleTypes: [],
-    includedAirlines: ['MCO', 'LAX'],
+    allowedAirportDirections: ['pickup', 'dropoff'],
+    allowedAirlines: ['AF', 'DAL'],
   };
 
-  // 1) City-to-city: no airport tags => bypass => PASS
+  // 1) City-to-city: no airport tags => PASS regardless of direction
   runCase(
-    'city-to-city bypass',
+    'city-to-city (no airport tags)',
     makeOffer('1', 'p1', 'd1'),
     [
       makeLocation('p1', { tags: ['city'], formatted_address_en: 'Downtown' }),
@@ -67,46 +70,68 @@ async function main(): Promise<void> {
     baseFilters
   );
 
-  // 2) Pickup is airport (MCO) and allowed => PASS
+  // 2) Pickup airport only, directions allow pickup => PASS
   runCase(
-    'pickup airport allowed',
+    'pickup airport allowed by direction',
     makeOffer('2', 'p2', 'd2'),
     [
-      makeLocation('p2', { tags: ['airport'], airport_iata: 'MCO' }),
+      makeLocation('p2', { tags: ['airport'], formatted_address_en: 'Airport' }),
       makeLocation('d2', { tags: ['city'], formatted_address_en: 'Downtown' }),
+    ],
+    { ...baseFilters, allowedAirportDirections: ['pickup'] }
+  );
+
+  // 3) Pickup airport only, directions disallow pickup => FAIL
+  runCase(
+    'pickup airport blocked by direction',
+    makeOffer('3', 'p3', 'd3'),
+    [
+      makeLocation('p3', { tags: ['airport'], formatted_address_en: 'Airport' }),
+      makeLocation('d3', { tags: ['city'], formatted_address_en: 'Downtown' }),
+    ],
+    { ...baseFilters, allowedAirportDirections: ['dropoff'] }
+  );
+
+  // 4) flight_number empty => PASS (no airline restriction)
+  runCase(
+    'no flight_number => airline filter bypass',
+    makeOffer('4', 'p4', 'd4'),
+    [
+      makeLocation('p4', { tags: ['city'], formatted_address_en: 'City A' }),
+      makeLocation('d4', { tags: ['city'], formatted_address_en: 'City B' }),
     ],
     baseFilters
   );
 
-  // 3) Pickup is airport (MCO) but NOT allowed => FAIL
+  // 5) flight_number present, allowedAirlines empty => PASS
   runCase(
-    'pickup airport not allowed',
-    makeOffer('3', 'p3', 'd3'),
+    'flight_number present, allowedAirlines empty',
+    makeOffer('5', 'p5', 'd5', 'dal123'),
     [
-      makeLocation('p3', { tags: ['airport'], airport_iata: 'MCO' }),
-      makeLocation('d3', { tags: ['city'], formatted_address_en: 'Downtown' }),
+      makeLocation('p5', { tags: ['city'], formatted_address_en: 'City A' }),
+      makeLocation('d5', { tags: ['city'], formatted_address_en: 'City B' }),
     ],
-    { ...baseFilters, includedAirlines: ['LAX'] }
+    { ...baseFilters, allowedAirlines: [] }
   );
 
-  // 4) Both airport: require BOTH IATAs allowed => FAIL if only one allowed
+  // 6) flight_number matches allowedAirlines (startsWith)
   runCase(
-    'both airports only one allowed',
-    makeOffer('4', 'p4', 'd4'),
+    'flight_number matches allowedAirlines (startsWith)',
+    makeOffer('6', 'p6', 'd6', 'AF1234'),
     [
-      makeLocation('p4', { tags: ['airport'], airport_iata: 'MCO' }),
-      makeLocation('d4', { tags: ['airport'], airport_iata: 'LAX' }),
+      makeLocation('p6', { tags: ['city'], formatted_address_en: 'City A' }),
+      makeLocation('d6', { tags: ['city'], formatted_address_en: 'City B' }),
     ],
-    { ...baseFilters, includedAirlines: ['MCO'] }
+    baseFilters
   );
 
-  // 5) Both airport: both allowed => PASS
+  // 7) flight_number does NOT match allowedAirlines => FAIL
   runCase(
-    'both airports both allowed',
-    makeOffer('5', 'p5', 'd5'),
+    'flight_number not in allowedAirlines',
+    makeOffer('7', 'p7', 'd7', 'LH999'),
     [
-      makeLocation('p5', { tags: ['airport'], airport_iata: 'MCO' }),
-      makeLocation('d5', { tags: ['airport'], airport_iata: 'LAX' }),
+      makeLocation('p7', { tags: ['city'], formatted_address_en: 'City A' }),
+      makeLocation('d7', { tags: ['city'], formatted_address_en: 'City B' }),
     ],
     baseFilters
   );
