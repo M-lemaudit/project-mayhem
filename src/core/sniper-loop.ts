@@ -109,6 +109,41 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
           allowedDropoffCities: (raw as any).allowedZipCodes as string[],
         }
       : {}),
+    // Time-window filters (static)
+    ...(Array.isArray((raw as any).blackoutDates) &&
+      (raw as any).blackoutDates.length > 0 && {
+        blackoutDates: ((raw as any).blackoutDates as unknown[]).flatMap((v) => {
+          if (typeof v !== 'string') return [];
+          const trimmed = v.trim();
+          return trimmed ? [trimmed] : [];
+        }),
+      }),
+    ...(() => {
+      const allowedStart =
+        typeof (raw as any).allowedStartDate === 'string' && (raw as any).allowedStartDate.trim()
+          ? (raw as any).allowedStartDate
+          : typeof (raw as any).dateStart === 'string' && (raw as any).dateStart.trim()
+            ? (raw as any).dateStart
+            : typeof (raw as any).date_start === 'string' && (raw as any).date_start.trim()
+              ? (raw as any).date_start
+              : undefined;
+      const allowedEnd =
+        typeof (raw as any).allowedEndDate === 'string' && (raw as any).allowedEndDate.trim()
+          ? (raw as any).allowedEndDate
+          : typeof (raw as any).dateEnd === 'string' && (raw as any).dateEnd.trim()
+            ? (raw as any).dateEnd
+            : typeof (raw as any).date_end === 'string' && (raw as any).date_end.trim()
+              ? (raw as any).date_end
+              : undefined;
+      const out: Partial<BotFilters> = {};
+      if (allowedStart) {
+        out.allowedStartDate = String(allowedStart);
+      }
+      if (allowedEnd) {
+        out.allowedEndDate = String(allowedEnd);
+      }
+      return out;
+    })(),
   };
 }
 
@@ -250,6 +285,8 @@ export class SniperLoop {
   private readonly botId: string | undefined;
   /** IANA timezone for "now" in gate time / working hours (e.g. Europe/Paris). */
   private readonly timezoneId: string | undefined;
+  /** Consecutive gateway errors (5xx like 502/503) seen in the hot loop. */
+  private consecutiveGatewayErrors = 0;
 
   constructor(
     private readonly api: BlacklaneApi,
@@ -387,7 +424,13 @@ export class SniperLoop {
               const idStr = String(id);
               if (this.processedOfferIds.has(idStr)) continue;
 
-              const result = FilterEngine.isMatch(offer, filters, existingRides, included);
+              const result = FilterEngine.isMatch(
+                offer,
+                filters,
+                existingRides,
+                included,
+                this.timezoneId
+              );
 
               if (result.match) {
                 this.processedOfferIds.add(idStr);
@@ -510,8 +553,32 @@ export class SniperLoop {
               }
             );
           } else {
-            console.error(`${this.logPrefix} Erreur cycle:`, err);
-            if (this.botState) await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
+            const maybeStatus = (err as any)?.response?.status;
+            const statusCode =
+              typeof maybeStatus === 'number' && Number.isFinite(maybeStatus)
+                ? maybeStatus
+                : undefined;
+
+            if (statusCode === 502 || statusCode === 503) {
+              this.consecutiveGatewayErrors += 1;
+              console.error(
+                `${this.logPrefix} Gateway error (${statusCode}) in sniper cycle. Count=${this.consecutiveGatewayErrors}.`,
+                err
+              );
+
+              if (this.consecutiveGatewayErrors >= 3) {
+                console.error(
+                  `${this.logPrefix} Gateway error (${statusCode}) occurred 3 times in a row → marking bot as ERROR_AUTH.`
+                );
+                if (this.botState) {
+                  await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
+                }
+              }
+            } else {
+              this.consecutiveGatewayErrors = 0;
+              console.error(`${this.logPrefix} Erreur cycle:`, err);
+              if (this.botState) await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
+            }
           }
         }
       }

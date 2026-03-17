@@ -27,6 +27,10 @@ export default function AccountPage({ params }: AccountPageProps) {
   const [maxDistance, setMaxDistance] = useState(5000);
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
+  const [blackoutDateInput, setBlackoutDateInput] = useState('');
+  const [blackoutDates, setBlackoutDates] = useState<string[]>([]);
+  const [allowedStartDate, setAllowedStartDate] = useState('');
+  const [allowedEndDate, setAllowedEndDate] = useState('');
   const [minGapMinutes, setMinGapMinutes] = useState(0);
   const [rideType, setRideType] = useState('Both');
   const [vehicleClasses, setVehicleClasses] = useState<string[]>(['first']);
@@ -76,6 +80,24 @@ export default function AccountPage({ params }: AccountPageProps) {
       setMaxDistance(Math.min(Number(f.maxDistance || f.max_distance || 5000), 5000));
       setDateStart(String(f.dateStart || f.date_start || ''));
       setDateEnd(String(f.dateEnd || f.date_end || ''));
+      const boRaw = (f.blackoutDates as string[] | undefined) ?? [];
+      setBlackoutDates(
+        Array.isArray(boRaw)
+          ? boRaw.map((d) => (typeof d === 'string' ? d.trim() : '')).filter(Boolean)
+          : []
+      );
+      const startWindow =
+        (typeof f.allowedStartDate === 'string' && f.allowedStartDate) ||
+        (typeof f.dateStart === 'string' && f.dateStart) ||
+        (typeof f.date_start === 'string' && f.date_start) ||
+        '';
+      const endWindow =
+        (typeof f.allowedEndDate === 'string' && f.allowedEndDate) ||
+        (typeof f.dateEnd === 'string' && f.dateEnd) ||
+        (typeof f.date_end === 'string' && f.date_end) ||
+        '';
+      setAllowedStartDate(String(startWindow || ''));
+      setAllowedEndDate(String(endWindow || ''));
       setMinGapMinutes(Number(f.minGapMinutes || f.min_gap_minutes || 0));
       const storedRideType = String(f.rideType || f.ride_type || 'Both');
       const normalizedRideType =
@@ -146,6 +168,9 @@ export default function AccountPage({ params }: AccountPageProps) {
       maxDistance,
       dateStart,
       dateEnd,
+      blackoutDates,
+      allowedStartDate,
+      allowedEndDate,
       minGapMinutes,
       minLeadHours,
       rideType: rideType.trim().toLowerCase(),
@@ -264,6 +289,21 @@ export default function AccountPage({ params }: AccountPageProps) {
     setAllowedDropoffCities(allowedDropoffCities.filter((c) => c !== city));
   };
 
+  const addBlackoutDate = () => {
+    const value = blackoutDateInput.trim();
+    if (!value) return;
+    if (!blackoutDates.includes(value)) {
+      setIsDirty(true);
+      setBlackoutDates([...blackoutDates, value]);
+    }
+    setBlackoutDateInput('');
+  };
+
+  const removeBlackoutDate = (value: string) => {
+    setIsDirty(true);
+    setBlackoutDates(blackoutDates.filter((d) => d !== value));
+  };
+
   if (loading) {
     return <FullPageLoader message="Loading account settings..." />;
   }
@@ -304,8 +344,23 @@ export default function AccountPage({ params }: AccountPageProps) {
                   </div>
                   <div className="flex items-center gap-4 mt-1">
                     <p className="text-slate-400 text-sm flex items-center gap-1.5">
-                      <span className={`size-2 rounded-full ${bot?.status === 'RUNNING' ? 'bg-[#d4af35] pulse-gold' : 'bg-slate-600'}`}></span>
-                      Status: {bot?.status === 'RUNNING' ? 'Active' : 'Standby'}
+                      <span
+                        className={`size-2 rounded-full ${
+                          bot?.status === 'RUNNING'
+                            ? 'bg-[#d4af35] pulse-gold'
+                            : bot?.status === 'ERROR_AUTH'
+                            ? 'bg-rose-500 pulse-gold'
+                            : 'bg-slate-600'
+                        }`}
+                      ></span>
+                      <span>
+                        Status:{' '}
+                        {bot?.status === 'RUNNING'
+                          ? 'Active'
+                          : bot?.status === 'ERROR_AUTH'
+                          ? 'Error'
+                          : 'Standby'}
+                      </span>
                     </p>
                     <p className="text-slate-400 text-sm flex items-center gap-1.5">
                       <span className="material-symbols-outlined text-sm">sync</span>
@@ -315,23 +370,33 @@ export default function AccountPage({ params }: AccountPageProps) {
                 </div>
               </div>
               <div className="flex items-center gap-4 w-full md:w-auto">
-                <button 
-                  onClick={handleToggleStatus}
-                  disabled={isUpdatingStatus}
-                  className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-2.5 font-bold rounded-lg transition-all shadow-lg active:scale-95 disabled:opacity-50
-                    ${bot?.status === 'RUNNING' 
-                      ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20 hover:bg-rose-500 hover:text-white shadow-rose-500/10' 
-                      : 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 hover:bg-emerald-500 hover:text-white shadow-emerald-500/10'
-                    }`}
-                >
-                  <span className={`material-symbols-outlined text-lg ${isUpdatingStatus ? 'animate-spin' : ''}`}>
-                    {isUpdatingStatus ? 'sync' : bot?.status === 'RUNNING' ? 'stop_circle' : 'play_circle'}
-                  </span>
-                  {isUpdatingStatus 
-                    ? 'Processing...' 
-                    : bot?.status === 'RUNNING' ? 'Stop Bot' : 'Start Bot'
-                  }
-                </button>
+                {bot?.status === 'ERROR_AUTH' ? (
+                  <button
+                    type="button"
+                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-2.5 font-bold rounded-lg transition-all shadow-lg bg-rose-500/10 text-rose-400 border border-rose-500/40 cursor-default"
+                  >
+                    <span className="material-symbols-outlined text-lg">error</span>
+                    Bot error — contact support
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleToggleStatus}
+                    disabled={isUpdatingStatus}
+                    className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-2.5 font-bold rounded-lg transition-all shadow-lg active:scale-95 disabled:opacity-50
+                      ${bot?.status === 'RUNNING' 
+                        ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20 hover:bg-rose-500 hover:text-white shadow-rose-500/10' 
+                        : 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 hover:bg-emerald-500 hover:text-white shadow-emerald-500/10'
+                      }`}
+                  >
+                    <span className={`material-symbols-outlined text-lg ${isUpdatingStatus ? 'animate-spin' : ''}`}>
+                      {isUpdatingStatus ? 'sync' : bot?.status === 'RUNNING' ? 'stop_circle' : 'play_circle'}
+                    </span>
+                    {isUpdatingStatus 
+                      ? 'Processing...' 
+                      : bot?.status === 'RUNNING' ? 'Stop Bot' : 'Start Bot'
+                    }
+                  </button>
+                )}
                 <button 
                   onClick={() => setIsSettingsOpen(true)}
                   className="flex items-center justify-center h-11 w-11 rounded-lg border border-[#514c3e] bg-[#37342a]/30 text-slate-300 hover:text-white transition-colors"
@@ -800,6 +865,109 @@ export default function AccountPage({ params }: AccountPageProps) {
                           ))}
                         </div>
                       )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Time-based Rules */}
+                <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="material-symbols-outlined text-[#d4af35]">event</span>
+                    <h3 className="text-white text-lg font-bold">Time-based Rules</h3>
+                  </div>
+                  <p className="text-slate-400 text-xs mb-6">
+                    Configure blackout dates and a static time window in which rides are allowed.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-4">
+                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-sm">block</span>
+                        Blackout Dates
+                      </label>
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          addBlackoutDate();
+                        }}
+                        className="flex gap-2"
+                      >
+                        <input
+                          type="date"
+                          value={blackoutDateInput}
+                          onChange={(e) => setBlackoutDateInput(e.target.value)}
+                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                        />
+                        <button
+                          type="submit"
+                          className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20"
+                        >
+                          Add
+                        </button>
+                      </form>
+                      {blackoutDates.length === 0 ? (
+                        <div className="p-4 border border-dashed border-[#514c3e] rounded-lg text-center">
+                          <p className="text-xs text-slate-500 italic">
+                            No blackout dates configured. All pickup dates are allowed.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {blackoutDates.map((d) => (
+                            <div
+                              key={d}
+                              className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs"
+                            >
+                              <span className="text-emerald-400 font-medium">{d}</span>
+                              <button
+                                onClick={() => removeBlackoutDate(d)}
+                                className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400"
+                              >
+                                close
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-sm">schedule</span>
+                        Static Time Window
+                      </label>
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <span className="text-xs text-slate-400 uppercase tracking-wider">
+                            Allowed Start (inclusive)
+                          </span>
+                          <input
+                            type="datetime-local"
+                            value={allowedStartDate}
+                            onChange={(e) => {
+                              setIsDirty(true);
+                              setAllowedStartDate(e.target.value);
+                            }}
+                            className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-xs text-slate-400 uppercase tracking-wider">
+                            Allowed End (inclusive)
+                          </span>
+                          <input
+                            type="datetime-local"
+                            value={allowedEndDate}
+                            onChange={(e) => {
+                              setIsDirty(true);
+                              setAllowedEndDate(e.target.value);
+                            }}
+                            className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 italic">
+                          If left empty, no static window restriction is applied on that side. Times
+                          are interpreted in your base timezone.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>

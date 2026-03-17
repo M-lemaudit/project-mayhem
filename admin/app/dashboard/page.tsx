@@ -19,7 +19,7 @@ interface NetworkAccount {
   id: string;
   providerLabel: string;
   providerVariant: 'blacklane' | 'sixt' | 'w' | 'generic';
-  statusLabel: 'Active' | 'Standby';
+  statusLabel: 'Active' | 'Standby' | 'Error';
   title: string;
   subtitle: string;
   revenueLabel: string;
@@ -47,7 +47,11 @@ function mapBotToAccount(bot: BotRow): NetworkAccount {
   }
 
   const statusLabel: NetworkAccount['statusLabel'] =
-    bot.status === 'RUNNING' ? 'Active' : 'Standby';
+    bot.status === 'RUNNING'
+      ? 'Active'
+      : bot.status === 'ERROR_AUTH'
+      ? 'Error'
+      : 'Standby';
 
   return {
     id: bot.id,
@@ -308,6 +312,10 @@ export default function DashboardPage() {
                     {account.statusLabel === 'Active' ? (
                       <span className="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">
                         Active
+                      </span>
+                    ) : account.statusLabel === 'Error' ? (
+                      <span className="px-2 py-0.5 bg-rose-500/10 text-rose-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-rose-500/30">
+                        Error
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-white/10">

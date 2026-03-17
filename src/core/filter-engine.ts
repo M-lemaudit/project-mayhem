@@ -39,6 +39,12 @@ export interface BotFilters {
   allowedPickupCities?: string[];
   /** Dropoff cities whitelist. Empty = all dropoff cities allowed. */
   allowedDropoffCities?: string[];
+  /** Dates (YYYY-MM-DD, in bot timezone) where rides must be rejected. */
+  blackoutDates?: string[];
+  /** Static lower bound for ride start datetime (inclusive). */
+  allowedStartDate?: string;
+  /** Static upper bound for ride start datetime (inclusive). */
+  allowedEndDate?: string;
 }
 
 /** Cached ride from Supabase (start_at, end_at as ISO strings). */
@@ -312,7 +318,8 @@ export class FilterEngine {
     offer: OfferShape,
     filters: BotFilters,
     existingRides: ExistingRide[] = [],
-    included: IncludedResource[] = []
+    included: IncludedResource[] = [],
+    timezoneId?: string
   ): MatchResult {
     const offerIdRaw = (offer as Record<string, unknown>)?.id;
     const offerId = offerIdRaw != null ? String(offerIdRaw) : 'unknown';
@@ -553,6 +560,205 @@ export class FilterEngine {
             }
           );
           if (res) return res;
+        }
+      }
+    }
+
+    // ── Blackout dates (by ride local date) ────────────────────────
+    const blackoutDatesRaw = Array.isArray(filters.blackoutDates)
+      ? (filters.blackoutDates as string[])
+      : [];
+    if (blackoutDatesRaw.length > 0) {
+      const normalizedBlackouts = blackoutDatesRaw
+        .map((d) => (typeof d === 'string' ? d.trim() : ''))
+        .filter(Boolean);
+
+      const startsAtRaw =
+        (offer?.attributes as Record<string, unknown> | undefined)?.starts_at ??
+        (offer as Record<string, unknown>).starts_at;
+
+      let rideDate: Date | null = null;
+      if (typeof startsAtRaw === 'string' && startsAtRaw.trim()) {
+        const d = new Date(startsAtRaw.trim());
+        if (!Number.isNaN(d.getTime())) {
+          rideDate = d;
+        }
+      }
+
+      if (!rideDate) {
+        const res = fail('blackoutDates', 'Missing or invalid starts_at for blackoutDates filter', {
+          op: 'parse-date',
+          leftLabel: 'starts_at',
+          leftValue: startsAtRaw,
+          rightLabel: 'required',
+          rightValue: true,
+        });
+        if (res) return res;
+      } else {
+        let localDateStr: string;
+        try {
+          const formatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezoneId || undefined,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          });
+          localDateStr = formatter.format(rideDate);
+        } catch {
+          const fallback = new Date(rideDate.getTime());
+          const year = fallback.getFullYear();
+          const month = String(fallback.getMonth() + 1).padStart(2, '0');
+          const day = String(fallback.getDate()).padStart(2, '0');
+          localDateStr = `${year}-${month}-${day}`;
+        }
+
+        const passedBlackout = !normalizedBlackouts.includes(localDateStr);
+        traceCompare({
+          offerId,
+          filterName: 'blackoutDates',
+          op: 'not-in',
+          leftLabel: 'rideLocalDate',
+          leftValue: localDateStr,
+          rightLabel: 'blackoutDates',
+          rightValue: normalizedBlackouts,
+          passed: passedBlackout,
+        });
+
+        if (!passedBlackout) {
+          const res = fail(
+            'blackoutDates',
+            `Ride date ${localDateStr} is in blackout dates`,
+            {
+              op: 'not-in',
+              leftLabel: 'rideLocalDate',
+              leftValue: localDateStr,
+              rightLabel: 'blackoutDates',
+              rightValue: normalizedBlackouts,
+            }
+          );
+          if (res) return res;
+        }
+      }
+    }
+
+    // ── Static time range for ride start ───────────────────────────
+    const startsAtForWindow =
+      (offer?.attributes as Record<string, unknown> | undefined)?.starts_at ??
+      (offer as Record<string, unknown>).starts_at;
+    let rideStartForWindow: Date | null = null;
+    if (typeof startsAtForWindow === 'string' && startsAtForWindow.trim()) {
+      const d = new Date(startsAtForWindow.trim());
+      if (!Number.isNaN(d.getTime())) {
+        rideStartForWindow = d;
+      }
+    }
+
+    const hasStartBound =
+      typeof filters.allowedStartDate === 'string' && filters.allowedStartDate.trim().length > 0;
+    const hasEndBound =
+      typeof filters.allowedEndDate === 'string' && filters.allowedEndDate.trim().length > 0;
+
+    if (hasStartBound || hasEndBound) {
+      if (!rideStartForWindow) {
+        const res = fail(
+          'staticTimeRange',
+          'Missing or invalid starts_at for staticTimeRange filter',
+          {
+            op: 'parse-date',
+            leftLabel: 'starts_at',
+            leftValue: startsAtForWindow,
+            rightLabel: 'required',
+            rightValue: true,
+          }
+        );
+        if (res) return res;
+      } else {
+        if (hasStartBound) {
+          const startBoundary = new Date(filters.allowedStartDate as string);
+          if (Number.isNaN(startBoundary.getTime())) {
+            const res = fail(
+              'staticTimeRange',
+              'Invalid allowedStartDate',
+              {
+                op: 'parse-date',
+                leftLabel: 'allowedStartDate',
+                leftValue: filters.allowedStartDate,
+                rightLabel: 'validDate',
+                rightValue: true,
+              }
+            );
+            if (res) return res;
+          } else {
+            const passedStart = rideStartForWindow.getTime() >= startBoundary.getTime();
+            traceCompare({
+              offerId,
+              filterName: 'staticTimeRange',
+              op: '>=',
+              leftLabel: 'rideStart',
+              leftValue: rideStartForWindow,
+              rightLabel: 'allowedStartDate',
+              rightValue: startBoundary,
+              passed: passedStart,
+            });
+            if (!passedStart) {
+              const res = fail(
+                'staticTimeRange',
+                'Ride starts before allowedStartDate',
+                {
+                  op: '>=',
+                  leftLabel: 'rideStart',
+                  leftValue: rideStartForWindow,
+                  rightLabel: 'allowedStartDate',
+                  rightValue: startBoundary,
+                }
+              );
+              if (res) return res;
+            }
+          }
+        }
+
+        if (hasEndBound) {
+          const endBoundary = new Date(filters.allowedEndDate as string);
+          if (Number.isNaN(endBoundary.getTime())) {
+            const res = fail(
+              'staticTimeRange',
+              'Invalid allowedEndDate',
+              {
+                op: 'parse-date',
+                leftLabel: 'allowedEndDate',
+                leftValue: filters.allowedEndDate,
+                rightLabel: 'validDate',
+                rightValue: true,
+              }
+            );
+            if (res) return res;
+          } else {
+            const passedEnd = rideStartForWindow.getTime() <= endBoundary.getTime();
+            traceCompare({
+              offerId,
+              filterName: 'staticTimeRange',
+              op: '<=',
+              leftLabel: 'rideStart',
+              leftValue: rideStartForWindow,
+              rightLabel: 'allowedEndDate',
+              rightValue: endBoundary,
+              passed: passedEnd,
+            });
+            if (!passedEnd) {
+              const res = fail(
+                'staticTimeRange',
+                'Ride starts after allowedEndDate',
+                {
+                  op: '<=',
+                  leftLabel: 'rideStart',
+                  leftValue: rideStartForWindow,
+                  rightLabel: 'allowedEndDate',
+                  rightValue: endBoundary,
+                }
+              );
+              if (res) return res;
+            }
+          }
         }
       }
     }
