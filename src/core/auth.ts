@@ -4,6 +4,7 @@
  */
 
 import type { Page } from 'playwright-core';
+import crypto from 'node:crypto';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { logger } from '../utils';
@@ -30,6 +31,69 @@ const ATHENA_HOST = 'athena.blacklane.com';
 const BEARER_PREFIX = 'Bearer ';
 /** Fallback Accept when browser does not send it in the captured request. */
 const DEFAULT_ACCEPT = 'application/vnd.blacklane.v2+json';
+
+function generateRandomSessionId(length = 8): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const alphabetSize = alphabet.length;
+  const maxUnbiased = Math.floor(256 / alphabetSize) * alphabetSize; // 248 for base62
+
+  let result = '';
+  while (result.length < length) {
+    const bytes = crypto.randomBytes(Math.max(16, length));
+    for (const byte of bytes) {
+      if (byte >= maxUnbiased) continue;
+      result += alphabet[byte % alphabetSize];
+      if (result.length >= length) break;
+    }
+  }
+  return result;
+}
+
+function getDynamicProxyUrl(baseProxyUrl: string): string {
+  const url = new URL(baseProxyUrl);
+  const decodedUsername = url.username ? decodeURIComponent(url.username) : '';
+  const rotatedUsername = decodedUsername.replace(
+    /(session-)[A-Za-z0-9]+/,
+    `$1${generateRandomSessionId()}`
+  );
+  if (rotatedUsername) {
+    url.username = rotatedUsername;
+  }
+  return url.toString();
+}
+
+function getProxySessionLabel(username: string | undefined): string | undefined {
+  if (!username) return undefined;
+  const match = username.match(/session-[A-Za-z0-9]+/);
+  return match?.[0];
+}
+
+function getPlaywrightProxyFromUrl(proxyUrl: string):
+  | {
+      server: string;
+      username?: string;
+      password?: string;
+    }
+  | undefined {
+  try {
+    const url = new URL(proxyUrl);
+    if (!url.hostname) return undefined;
+
+    const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+    const server = `http://${url.hostname}:${port}`;
+
+    const username = url.username ? decodeURIComponent(url.username) : '';
+    const password = url.password ? decodeURIComponent(url.password) : '';
+
+    return {
+      server,
+      ...(username && { username }),
+      ...(password && { password }),
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 function getPlaywrightProxyFromEnv():
   | {
@@ -203,6 +267,7 @@ export async function loginAndGetToken(
   browserOptions?: AuthBrowserOptions
 ): Promise<AuthResult> {
   if (isSavedSessionUsable(savedSession)) {
+    logger.info(`[AUTH] Using saved session for ${email} (skipping Playwright login)`);
     return savedSessionToAuthResult(savedSession);
   }
 
@@ -210,105 +275,145 @@ export async function loginAndGetToken(
     browserOptions?.timezoneId?.trim() || BROWSER_TIMEZONE_ID;
   const locale = browserOptions?.locale?.trim() || BROWSER_LOCALE;
 
-  const proxy = getPlaywrightProxyFromEnv();
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--disable-blink-features=AutomationControlled'],
-    ...(proxy && { proxy }),
-  });
+  const maxAttempts = 3;
+  let lastError: unknown;
 
-  try {
-    const context = await browser.newContext({
-      userAgent: CHROME_WINDOWS_USER_AGENT,
-      locale,
-      timezoneId,
-      viewport: { width: 1280, height: 800 },
-      ignoreHTTPSErrors: false,
-    });
-    const page = await context.newPage();
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const baseProxyUrl = process.env.PROXY_URL?.trim();
+    const localProxyUrl = baseProxyUrl ? getDynamicProxyUrl(baseProxyUrl) : undefined;
+    const proxy = localProxyUrl ? getPlaywrightProxyFromUrl(localProxyUrl) : undefined;
+    const sessionLabel = proxy?.username ? getProxySessionLabel(proxy.username) : undefined;
+    if (sessionLabel) {
+      logger.info(`[AUTH] Using proxy ${sessionLabel} for ${email} (Attempt ${attempt + 1}/${maxAttempts})`);
+    }
+    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 
-    await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: LOGIN_TIMEOUT_MS });
-
-    const emailSelector = 'input[name="email"], input[type="email"], input[id*="email"]';
-    const passwordSelector = 'input[name="password"], input[type="password"], input[id*="password"]';
-    await page.waitForSelector(emailSelector, { timeout: 10_000 });
-    await page.waitForSelector(passwordSelector, { timeout: 10_000 });
-
-    const plainPassword = looksEncrypted(password) ? decrypt(password) : password;
-
-    await humanType(page, emailSelector, email);
-    await delay(randomDelayMs(200, 500));
-    await humanType(page, passwordSelector, plainPassword);
-
-    const submitSelector =
-      'button[type="submit"], input[type="submit"], [data-testid*="login"], button:has-text("Log in"), button:has-text("Sign in")';
-
-    const tokenPromise = page.waitForRequest(
-      (request) => {
-        const url = request.url();
-        const headers = request.headers();
-        const auth = headers['authorization'] ?? headers['Authorization'];
-        const hasAthena = url.includes(ATHENA_HOST);
-        const hasBearer = typeof auth === 'string' && auth.startsWith(BEARER_PREFIX);
-        return (hasAthena && !!auth) || hasBearer;
-      },
-      { timeout: TOKEN_REQUEST_TIMEOUT_MS }
-    );
-
-    await page.click(submitSelector, { timeout: 5_000 });
-
-    let request;
     try {
-      request = await tokenPromise;
-    } catch {
-      const currentUrl = page.url();
-      if (currentUrl.includes('/login')) {
-        throw new AuthError('Login did not complete; still on login page', 'INVALID_CREDENTIALS');
-      }
-      throw new AuthError(
-        `No request with Authorization header within ${TOKEN_REQUEST_TIMEOUT_MS}ms (check athena.blacklane.com or Bearer in Network tab)`,
-        'TOKEN_NOT_FOUND'
-      );
-    }
-    const headers = request.headers();
-    const authHeader = headers['authorization'] ?? headers['Authorization'];
-    const accessToken = normalizeBearerToken(authHeader);
-    if (!accessToken) {
-      throw new AuthError(
-        'Request had no Authorization header or empty Bearer token',
-        'TOKEN_NOT_FOUND'
-      );
-    }
-    const acceptHeader =
-      (headers['accept'] ?? headers['Accept'] ?? '').trim() || DEFAULT_ACCEPT;
-    const xBlacklaneContext = (headers['x-blacklane-context'] ?? '').trim() || undefined;
-    const xDeviceId = (headers['x-device-id'] ?? '').trim() || undefined;
-    const cookies = await context.cookies();
-    const authCookies: AuthCookie[] = cookies.map((c) => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path,
-      expires: c.expires,
-      httpOnly: c.httpOnly,
-      secure: c.secure,
-      sameSite: c.sameSite as AuthCookie['sameSite'],
-    }));
-    /* eslint-disable-next-line no-undef -- runs in browser context */
-    const userAgent = await page.evaluate(() => navigator.userAgent);
+      browser = await chromium.launch({
+        headless: true,
+        args: ['--disable-blink-features=AutomationControlled'],
+        ...(proxy && { proxy }),
+      });
 
-    return {
-      accessToken,
-      cookies: authCookies,
-      userAgent,
-      acceptHeader,
-      ...(xBlacklaneContext && { xBlacklaneContext }),
-      ...(xDeviceId && { xDeviceId }),
-    };
-  } finally {
-    await browser.close();
-    logger.debug('Browser closed');
+      const context = await browser.newContext({
+        userAgent: CHROME_WINDOWS_USER_AGENT,
+        locale,
+        timezoneId,
+        viewport: { width: 1280, height: 800 },
+        ignoreHTTPSErrors: false,
+      });
+      const page = await context.newPage();
+
+      const response = await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: LOGIN_TIMEOUT_MS });
+      const status = response?.status();
+      if (status === 502) {
+        throw new Error(`Blacklane login returned ${status}`);
+      }
+
+      const emailSelector = 'input[name="email"], input[type="email"], input[id*="email"]';
+      const passwordSelector = 'input[name="password"], input[type="password"], input[id*="password"]';
+      await page.waitForSelector(emailSelector, { timeout: 10_000 });
+      await page.waitForSelector(passwordSelector, { timeout: 10_000 });
+
+      const plainPassword = looksEncrypted(password) ? decrypt(password) : password;
+
+      await humanType(page, emailSelector, email);
+      await delay(randomDelayMs(200, 500));
+      await humanType(page, passwordSelector, plainPassword);
+
+      const submitSelector =
+        'button[type="submit"], input[type="submit"], [data-testid*="login"], button:has-text("Log in"), button:has-text("Sign in")';
+
+      const tokenPromise = page.waitForRequest(
+        (request) => {
+          const url = request.url();
+          const headers = request.headers();
+          const auth = headers['authorization'] ?? headers['Authorization'];
+          const hasAthena = url.includes(ATHENA_HOST);
+          const hasBearer = typeof auth === 'string' && auth.startsWith(BEARER_PREFIX);
+          return (hasAthena && !!auth) || hasBearer;
+        },
+        { timeout: TOKEN_REQUEST_TIMEOUT_MS }
+      );
+
+      await page.click(submitSelector, { timeout: 5_000 });
+
+      let request;
+      try {
+        request = await tokenPromise;
+      } catch {
+        const currentUrl = page.url();
+        if (currentUrl.includes('/login')) {
+          throw new AuthError('Login did not complete; still on login page', 'INVALID_CREDENTIALS');
+        }
+        throw new AuthError(
+          `No request with Authorization header within ${TOKEN_REQUEST_TIMEOUT_MS}ms (check athena.blacklane.com or Bearer in Network tab)`,
+          'TOKEN_NOT_FOUND'
+        );
+      }
+      const headers = request.headers();
+      const authHeader = headers['authorization'] ?? headers['Authorization'];
+      const accessToken = normalizeBearerToken(authHeader);
+      if (!accessToken) {
+        throw new AuthError(
+          'Request had no Authorization header or empty Bearer token',
+          'TOKEN_NOT_FOUND'
+        );
+      }
+      const acceptHeader =
+        (headers['accept'] ?? headers['Accept'] ?? '').trim() || DEFAULT_ACCEPT;
+      const xBlacklaneContext = (headers['x-blacklane-context'] ?? '').trim() || undefined;
+      const xDeviceId = (headers['x-device-id'] ?? '').trim() || undefined;
+      const cookies = await context.cookies();
+      const authCookies: AuthCookie[] = cookies.map((c) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        expires: c.expires,
+        httpOnly: c.httpOnly,
+        secure: c.secure,
+        sameSite: c.sameSite as AuthCookie['sameSite'],
+      }));
+      /* eslint-disable-next-line no-undef -- runs in browser context */
+      const userAgent = await page.evaluate(() => navigator.userAgent);
+
+      return {
+        accessToken,
+        cookies: authCookies,
+        userAgent,
+        acceptHeader,
+        ...(xBlacklaneContext && { xBlacklaneContext }),
+        ...(xDeviceId && { xDeviceId }),
+      };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+
+      const isTunnelOrProxyError =
+        message.includes('ERR_TUNNEL_CONNECTION_FAILED') ||
+        message.includes('ERR_PROXY_CONNECTION_FAILED');
+      const isGatewayError =
+        /\b502\b/.test(message);
+
+      const shouldRetry = isTunnelOrProxyError || isGatewayError;
+      if (!shouldRetry || attempt + 1 >= maxAttempts) {
+        throw error;
+      }
+
+      logger.warn(
+        `[AUTH] Proxy tunnel failed for ${email}. Rotating IP (Attempt ${attempt + 2}/${maxAttempts})...`
+      );
+      continue;
+    } finally {
+      if (browser) {
+        await browser.close();
+        logger.debug('Browser closed');
+      }
+    }
   }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /**
