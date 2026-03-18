@@ -6,7 +6,7 @@
 
 import 'dotenv/config';
 import { loginAndGetToken, discoverBlacklaneUserId } from './core/auth';
-import { SniperLoop, type BotFilters } from './core';
+import { ReauthRequiredError, SniperLoop, type BotFilters } from './core';
 import { BlacklaneApi, BotStateService, RideSyncService } from './services';
 import { logger } from './utils';
 import { getSupabase } from './config/supabase';
@@ -67,83 +67,107 @@ async function runBotInstance(
   pendingStarts.add(email);
   let rideSyncInterval: ReturnType<typeof setInterval> | undefined;
 
+  const password = resolvePassword(bot.password);
+  const botState = new BotStateService(email);
+
+  const browserOptions =
+    (bot.timezone?.trim() || bot.locale?.trim())
+      ? {
+          ...(bot.timezone?.trim() && { timezoneId: bot.timezone.trim() }),
+          ...(bot.locale?.trim() && { locale: bot.locale.trim() }),
+        }
+      : undefined;
+
+  let reauthAttempts = 0;
+  const maxReauthAttempts = 1;
+
   try {
-    const password = resolvePassword(bot.password);
-    const botState = new BotStateService(email);
+    while (true) {
+      try {
+        logger.info(`${prefix()} Connecting to Blacklane...`);
+        const savedSession = await botState.getSession();
+        const session = await loginAndGetToken(email, password, savedSession, browserOptions);
 
-    const browserOptions =
-      (bot.timezone?.trim() || bot.locale?.trim())
-        ? {
-            ...(bot.timezone?.trim() && { timezoneId: bot.timezone.trim() }),
-            ...(bot.locale?.trim() && { locale: bot.locale.trim() }),
+        await botState.saveSession({
+          accessToken: session.accessToken,
+          cookies: session.cookies,
+          userAgent: session.userAgent,
+          acceptHeader: session.acceptHeader,
+          ...(session.xBlacklaneContext && { xBlacklaneContext: session.xBlacklaneContext }),
+          ...(session.xDeviceId && { xDeviceId: session.xDeviceId }),
+        });
+
+        let blacklaneUserId = bot.blacklane_user_id;
+
+        if (!blacklaneUserId) {
+          const discoveredId = await discoverBlacklaneUserId(session.accessToken);
+          if (discoveredId) {
+            blacklaneUserId = discoveredId;
+            logger.info(`[AUTH] Auto-discovered Blacklane User ID: ${discoveredId}`);
+            const supabase = getSupabase();
+            await supabase
+              .from('bots')
+              .update({ blacklane_user_id: discoveredId })
+              .eq('id', bot.id);
           }
-        : undefined;
-    logger.info(`${prefix()} Connecting to Blacklane...`);
-    const savedSession = await botState.getSession();
-    const session = await loginAndGetToken(email, password, savedSession, browserOptions);
+        }
 
-    await botState.saveSession({
-      accessToken: session.accessToken,
-      cookies: session.cookies,
-      userAgent: session.userAgent,
-      acceptHeader: session.acceptHeader,
-      ...(session.xBlacklaneContext && { xBlacklaneContext: session.xBlacklaneContext }),
-      ...(session.xDeviceId && { xDeviceId: session.xDeviceId }),
-    });
+        if (!blacklaneUserId) {
+          throw new Error('blacklane_user_id is missing for bot ' + email + ' and auto-discovery failed.');
+        }
 
-    let blacklaneUserId = bot.blacklane_user_id;
+        const api = new BlacklaneApi(
+          email,
+          session.accessToken,
+          session.cookies,
+          session.userAgent,
+          blacklaneUserId
+        );
+        const rawFilters = await botState.getFilters();
+        const filters: BotFilters = {
+          minPrice: typeof rawFilters.minPrice === 'number' ? rawFilters.minPrice : 10,
+          allowedVehicleTypes: Array.isArray(rawFilters.allowedVehicleTypes)
+            ? (rawFilters.allowedVehicleTypes as string[])
+            : [],
+          ...(typeof rawFilters.maxPrice === 'number' && { maxPrice: rawFilters.maxPrice }),
+          ...(typeof rawFilters.minHoursFromNow === 'number' && {
+            minHoursFromNow: rawFilters.minHoursFromNow,
+          }),
+        };
 
-    if (!blacklaneUserId) {
-      const discoveredId = await discoverBlacklaneUserId(session.accessToken);
-      if (discoveredId) {
-        blacklaneUserId = discoveredId;
-        logger.info(`[AUTH] Auto-discovered Blacklane User ID: ${discoveredId}`);
         const supabase = getSupabase();
-        await supabase
-          .from('bots')
-          .update({ blacklane_user_id: discoveredId })
-          .eq('id', bot.id);
+        const rideSync = new RideSyncService(supabase, bot.id);
+        await rideSync.sync(api);
+        rideSyncInterval = setInterval(() => {
+          rideSync.sync(api).catch(() => {});
+        }, RIDE_SYNC_INTERVAL_MS);
+
+        logger.info(`${prefix()} Sniper started (Stop = dashboard).`);
+        const timezoneId = bot.timezone?.trim() || undefined;
+        const sniper = new SniperLoop(api, filters, botState, email, bot.id, timezoneId);
+        instances.set(email, sniper);
+
+        await sniper.start();
+        break;
+      } catch (err) {
+        if (rideSyncInterval != null) clearInterval(rideSyncInterval);
+        rideSyncInterval = undefined;
+        instances.delete(email);
+
+        if (err instanceof ReauthRequiredError && reauthAttempts < maxReauthAttempts) {
+          reauthAttempts += 1;
+          logger.warn(
+            `${prefix()} Gateway persisted → attempting Playwright re-auth (Attempt ${reauthAttempts}/${maxReauthAttempts})`
+          );
+          await botState.saveSession({}).catch(() => {});
+          continue;
+        }
+
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error(`${prefix()} Error:`, { err: message });
+        await botState.updateStatus('ERROR_AUTH').catch(() => {});
+        break;
       }
-    }
-
-    if (!blacklaneUserId) {
-      throw new Error('blacklane_user_id is missing for bot ' + email + ' and auto-discovery failed.');
-    }
-
-    const api = new BlacklaneApi(email, session.accessToken, session.cookies, session.userAgent, blacklaneUserId);
-    const rawFilters = await botState.getFilters();
-    const filters: BotFilters = {
-      minPrice: typeof rawFilters.minPrice === 'number' ? rawFilters.minPrice : 10,
-      allowedVehicleTypes: Array.isArray(rawFilters.allowedVehicleTypes)
-        ? (rawFilters.allowedVehicleTypes as string[])
-        : [],
-      ...(typeof rawFilters.maxPrice === 'number' && { maxPrice: rawFilters.maxPrice }),
-      ...(typeof rawFilters.minHoursFromNow === 'number' && {
-        minHoursFromNow: rawFilters.minHoursFromNow,
-      }),
-    };
-
-    const supabase = getSupabase();
-    const rideSync = new RideSyncService(supabase, bot.id);
-    await rideSync.sync(api);
-    rideSyncInterval = setInterval(() => {
-      rideSync.sync(api).catch(() => {});
-    }, RIDE_SYNC_INTERVAL_MS);
-
-    logger.info(`${prefix()} Sniper started (Stop = dashboard).`);
-    const timezoneId = bot.timezone?.trim() || undefined;
-    const sniper = new SniperLoop(api, filters, botState, email, bot.id, timezoneId);
-    instances.set(email, sniper);
-
-    await sniper.start();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.error(`${prefix()} Error:`, { err: message });
-    try {
-      const botState = new BotStateService(email);
-      await botState.updateStatus('ERROR_AUTH');
-    } catch {
-      /* ignore */
     }
   } finally {
     if (rideSyncInterval != null) clearInterval(rideSyncInterval);

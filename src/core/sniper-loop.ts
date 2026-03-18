@@ -579,13 +579,9 @@ export class SniperLoop {
                 console.error(
                   `${this.logPrefix} Gateway error (${statusCode}) occurred 3 times in a row → marking bot as ERROR_AUTH.`
                 );
-                if (this.botState) {
-                  // Force a clean re-auth cycle by clearing the saved session.
-                  await this.botState.saveSession({}).catch(() => {});
-                  await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
-                }
-                // Break out: let Fleet Manager restart and re-auth with Playwright.
-                throw new TokenExpiredError('Gateway errors persisted after proxy rotation');
+                // Stop the loop and ask Fleet Manager to re-auth with Playwright.
+                // We do NOT mark ERROR_AUTH here; re-auth is attempted first in runBotInstance.
+                throw new ReauthRequiredError('Gateway errors persisted after proxy rotation');
               }
             } else {
               this.consecutiveGatewayErrors = 0;
@@ -603,6 +599,14 @@ export class SniperLoop {
     } finally {
       unsubscribeRealtime?.();
     }
+  }
+}
+
+export class ReauthRequiredError extends Error {
+  constructor(message = 'Re-auth required') {
+    super(message);
+    this.name = 'ReauthRequiredError';
+    Object.setPrototypeOf(this, ReauthRequiredError.prototype);
   }
 }
 

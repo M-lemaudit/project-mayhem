@@ -14,4 +14,4 @@ export {
   loginAndGetToken,
 } from './auth';
 export { FilterEngine, BotFilters, ExistingRide, OfferShape, MatchResult } from './filter-engine';
-export { SniperLoop } from './sniper-loop';
+export { SniperLoop, ReauthRequiredError } from './sniper-loop';
