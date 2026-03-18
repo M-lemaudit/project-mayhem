@@ -175,7 +175,11 @@ async function runBotInstance(
           .replace(/\\/g, '/');
         const errorLogLines = errorLogDisplay.split('\n').filter((l) => l.trim().length > 0);
         logger.error(`${prefix()} Error:`, { err: message });
-        await botState.updateStatus('ERROR_AUTH').catch(() => {});
+        if (err instanceof AuthError && err.code === 'INVALID_CREDENTIALS') {
+          await botState.updateStatus('STOPPED').catch(() => {});
+        } else {
+          await botState.updateStatus('ERROR_AUTH').catch(() => {});
+        }
         let reason: Parameters<typeof triggerAuthErrorWebhook>[2] = 'unknown';
         let explanation: string | undefined;
 
