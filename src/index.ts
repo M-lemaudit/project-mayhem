@@ -5,10 +5,10 @@
  */
 
 import 'dotenv/config';
-import { loginAndGetToken, discoverBlacklaneUserId } from './core/auth';
+import { AuthError, loginAndGetToken, discoverBlacklaneUserId } from './core/auth';
 import { ReauthRequiredError, SniperLoop, type BotFilters } from './core';
 import { BlacklaneApi, BotStateService, RideSyncService } from './services';
-import { logger } from './utils';
+import { logger, triggerAuthErrorWebhook } from './utils';
 import { getSupabase } from './config/supabase';
 import { decrypt, looksEncrypted } from './utils/crypto';
 
@@ -164,8 +164,51 @@ async function runBotInstance(
         }
 
         const message = err instanceof Error ? err.message : String(err);
+        const errorLog =
+          err instanceof Error
+            ? (err.stack ? `${err.name}: ${err.message}\n${err.stack}` : `${err.name}: ${err.message}`)
+            : String(err);
+        const errorLogDisplay = errorLog
+          .replace(/\r\n/g, '\n')
+          .replace(/\r/g, '\n')
+          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+          .replace(/\\/g, '/');
+        const errorLogLines = errorLogDisplay.split('\n').filter((l) => l.trim().length > 0);
         logger.error(`${prefix()} Error:`, { err: message });
         await botState.updateStatus('ERROR_AUTH').catch(() => {});
+        let reason: Parameters<typeof triggerAuthErrorWebhook>[2] = 'unknown';
+        let explanation: string | undefined;
+
+        if (err instanceof ReauthRequiredError) {
+          reason = 'gateway_persisted_after_rotation';
+          explanation =
+            'The bot kept receiving 502/503 gateway errors even after rotating proxy sessions, and the automatic re-auth attempt was exhausted.';
+        } else if (err instanceof AuthError) {
+          if (err.code === 'INVALID_CREDENTIALS') {
+            reason = 'invalid_credentials';
+            explanation = 'Login stayed on the Blacklane login page, indicating invalid credentials or blocked login.';
+          } else if (err.code === 'TOKEN_NOT_FOUND') {
+            reason = 'token_not_found';
+            explanation =
+              'Playwright login succeeded partially, but no Authorization token request was captured within the expected timeout.';
+          } else {
+            reason = 'playwright_navigation_failed';
+            explanation = 'Playwright failed during navigation/login sequence.';
+          }
+        } else if (message.includes('ERR_TUNNEL_CONNECTION_FAILED') || message.includes('ERR_PROXY_CONNECTION_FAILED')) {
+          reason = 'proxy_tunnel_failed';
+          explanation = 'The proxy connection/tunnel failed (IPRoyal).';
+        }
+
+        await triggerAuthErrorWebhook(
+          email,
+          message,
+          reason,
+          explanation,
+          errorLog,
+          errorLogDisplay,
+          errorLogLines
+        );
         break;
       }
     }
