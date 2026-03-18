@@ -24,6 +24,25 @@ const PROCESSED_OFFER_IDS_MAX = 500;
 const MATCH_COOLDOWN_MIN_MS = 5 * 1000; // 5 seconds
 const MATCH_COOLDOWN_MAX_MS = 10 * 1000; // 10 seconds
 
+function getTodayIsoDateInTimezone(timezoneId?: string): string {
+  const tz = timezoneId?.trim();
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || undefined,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    return formatter.format(new Date());
+  } catch {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+}
+
 /** Normalize raw filters from DB to BotFilters shape. */
 function toBotFilters(raw: Record<string, unknown>): BotFilters {
   const workingHours = raw.working_hours as { start?: number; end?: number } | undefined;
@@ -287,6 +306,8 @@ export class SniperLoop {
   private readonly timezoneId: string | undefined;
   /** Consecutive gateway errors (5xx like 502/503) seen in the hot loop. */
   private consecutiveGatewayErrors = 0;
+  /** Last local (bot timezone) date when blackoutDates pruning ran. */
+  private lastBlackoutPruneIsoDate: string | null = null;
 
   constructor(
     private readonly api: BlacklaneApi,
@@ -353,6 +374,46 @@ export class SniperLoop {
           let filters: BotFilters = this.filters;
           if (this.botState) {
             const raw = await this.botState.getFilters();
+
+            // Daily housekeeping: prune past blackout dates from DB (by bot timezone)
+            if (this.botId) {
+              const todayIso = getTodayIsoDateInTimezone(this.timezoneId);
+              if (this.lastBlackoutPruneIsoDate !== todayIso) {
+                this.lastBlackoutPruneIsoDate = todayIso;
+                try {
+                  const rawFiltersOnly: Record<string, unknown> = { ...(raw ?? {}) };
+                  delete (rawFiltersOnly as any).working_hours;
+
+                  const bo = (rawFiltersOnly as any).blackoutDates;
+                  if (Array.isArray(bo) && bo.length > 0) {
+                    const normalized = (bo as unknown[])
+                      .flatMap((v) => (typeof v === 'string' ? [v.trim()] : []))
+                      .filter(Boolean);
+                    const pruned = normalized.filter((d) => d >= todayIso);
+
+                    const changed =
+                      pruned.length !== normalized.length ||
+                      pruned.some((d, i) => d !== normalized[i]);
+
+                    if (changed) {
+                      (rawFiltersOnly as any).blackoutDates = pruned;
+                      await getSupabase()
+                        .from('bots')
+                        .update({ filters: rawFiltersOnly })
+                        .eq('id', this.botId);
+                      console.log(
+                        `${this.logPrefix} 🧹 Pruned blackoutDates in DB (kept ${pruned.length}, removed ${normalized.length - pruned.length}).`
+                      );
+                    }
+                  }
+                } catch (err) {
+                  logger.warn('Failed to prune blackoutDates in DB', {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
+              }
+            }
+
             filters = toBotFilters(raw);
             const filtersJson = JSON.stringify(filters);
             if (filtersJson !== lastFiltersJson) {

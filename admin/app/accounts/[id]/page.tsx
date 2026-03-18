@@ -20,6 +20,25 @@ export default function AccountPage({ params }: AccountPageProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const getTodayIsoDateInTimezone = (timezoneId?: string | null): string => {
+    const tz = typeof timezoneId === 'string' ? timezoneId.trim() : '';
+    try {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz || undefined,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      return formatter.format(new Date());
+    } catch {
+      const d = new Date();
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+  };
+
   // Filter states
   const [minPrice, setMinPrice] = useState(50);
   const [maxPrice, setMaxPrice] = useState(400);
@@ -81,9 +100,14 @@ export default function AccountPage({ params }: AccountPageProps) {
       setDateStart(String(f.dateStart || f.date_start || ''));
       setDateEnd(String(f.dateEnd || f.date_end || ''));
       const boRaw = (f.blackoutDates as string[] | undefined) ?? [];
+      const todayIso = getTodayIsoDateInTimezone(botData.timezone || 'Europe/Paris');
       setBlackoutDates(
         Array.isArray(boRaw)
-          ? boRaw.map((d) => (typeof d === 'string' ? d.trim() : '')).filter(Boolean)
+          ? boRaw
+              .map((d) => (typeof d === 'string' ? d.trim() : ''))
+              .filter(Boolean)
+              // prune past blackout dates in bot timezone to avoid ever-growing list
+              .filter((d) => d >= todayIso)
           : []
       );
       const startWindow =
@@ -161,6 +185,13 @@ export default function AccountPage({ params }: AccountPageProps) {
 
   const handleSave = async () => {
     setSaving(true);
+    const todayIso = getTodayIsoDateInTimezone(timezone);
+    const sanitizedBlackoutDates = blackoutDates
+      .map((d) => (typeof d === 'string' ? d.trim() : ''))
+      .filter(Boolean)
+      .filter((d) => d >= todayIso)
+      .filter((d, idx, arr) => arr.indexOf(d) === idx)
+      .sort();
     const updatedFilters = {
       minPrice,
       maxPrice,
@@ -168,7 +199,7 @@ export default function AccountPage({ params }: AccountPageProps) {
       maxDistance,
       dateStart,
       dateEnd,
-      blackoutDates,
+      blackoutDates: sanitizedBlackoutDates,
       allowedStartDate,
       allowedEndDate,
       minGapMinutes,
@@ -292,6 +323,11 @@ export default function AccountPage({ params }: AccountPageProps) {
   const addBlackoutDate = () => {
     const value = blackoutDateInput.trim();
     if (!value) return;
+    const todayIso = getTodayIsoDateInTimezone(timezone);
+    if (value < todayIso) {
+      alert(`Blackout date cannot be in the past. Today (${timezone}) is ${todayIso}.`);
+      return;
+    }
     if (!blackoutDates.includes(value)) {
       setIsDirty(true);
       setBlackoutDates([...blackoutDates, value]);
