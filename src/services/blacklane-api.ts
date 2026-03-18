@@ -8,9 +8,9 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { AuthCookie } from '../core/auth';
 import { getOfferPrice } from '../core/filter-engine';
 import { logger } from '../utils';
+import crypto from 'node:crypto';
 
 const BASE_URL = process.env.BLACKLANE_API_URL ?? '';
-const PROXY_URL = process.env.PROXY_URL?.trim() || '';
 /** Request timeout in ms; default 15s to avoid ECONNABORTED when API or network is slow. */
 const REQUEST_TIMEOUT_MS = Number(process.env.BLACKLANE_REQUEST_TIMEOUT_MS) || 15_000;
 
@@ -52,25 +52,64 @@ function buildCookieHeader(cookies: AuthCookie[]): string {
   return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
 }
 
-function createAgent(): https.Agent {
-  if (PROXY_URL) {
-    try {
-      const proxyAgent = new HttpsProxyAgent(PROXY_URL);
-      logger.info('[NETWORK] Using HTTPS proxy agent for Blacklane API');
-      // Cast required because HttpsProxyAgent is not a native https.Agent type,
-      // but Axios accepts any Agent-compatible instance here.
-      return proxyAgent as unknown as https.Agent;
-    } catch (error) {
-      logger.warn('Failed to create HTTPS proxy agent, falling back to direct HTTPS agent.', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+function generateRandomSessionId(length = 8): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const alphabetSize = alphabet.length;
+  const maxUnbiased = Math.floor(256 / alphabetSize) * alphabetSize;
+
+  let result = '';
+  while (result.length < length) {
+    const bytes = crypto.randomBytes(Math.max(16, length));
+    for (const byte of bytes) {
+      if (byte >= maxUnbiased) continue;
+      result += alphabet[byte % alphabetSize];
+      if (result.length >= length) break;
     }
   }
+  return result;
+}
 
+function getDynamicProxyUrl(baseProxyUrl: string): string {
+  const url = new URL(baseProxyUrl);
+  const decodedUsername = url.username ? decodeURIComponent(url.username) : '';
+  const rotatedUsername = decodedUsername.replace(
+    /(session-)[A-Za-z0-9]+/,
+    `$1${generateRandomSessionId()}`
+  );
+  if (rotatedUsername) {
+    url.username = rotatedUsername;
+  }
+  return url.toString();
+}
+
+function getProxySessionLabelFromProxyUrl(proxyUrl: string): string | undefined {
+  try {
+    const url = new URL(proxyUrl);
+    const username = url.username ? decodeURIComponent(url.username) : '';
+    const match = username.match(/session-[A-Za-z0-9]+/);
+    return match?.[0];
+  } catch {
+    return undefined;
+  }
+}
+
+function createDirectAgent(): https.Agent {
   return new https.Agent({
     keepAlive: true,
     scheduling: 'fifo',
   });
+}
+
+function createProxyAgent(proxyUrl: string): https.Agent | undefined {
+  try {
+    const proxyAgent = new HttpsProxyAgent(proxyUrl);
+    return proxyAgent as unknown as https.Agent;
+  } catch (error) {
+    logger.warn('Failed to create HTTPS proxy agent, falling back to direct HTTPS agent.', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }
 
 /**
@@ -307,13 +346,17 @@ function mapPlannedRidesResponse(data: unknown): PlannedRide[] {
  * Headers match successful manual request; Authorization is set dynamically in setSession().
  */
 export class BlacklaneApi {
-  private readonly agent: https.Agent;
+  private agent: https.Agent;
   private readonly client: AxiosInstance;
   private userAgent: string;
   /** Blacklane internal user id used for authenticated actions on partner portal. */
   private readonly blacklaneUserId: string;
+  private readonly label: string;
+  private baseProxyUrl: string;
+  private currentProxyUrl: string;
 
   constructor(
+    label: string,
     accessToken: string,
     cookies: AuthCookie[],
     userAgent: string,
@@ -322,9 +365,13 @@ export class BlacklaneApi {
     if (!BASE_URL) {
       throw new Error('BLACKLANE_API_URL must be set');
     }
+    this.label = label;
     this.userAgent = userAgent;
     this.blacklaneUserId = blacklaneUserId;
-    this.agent = createAgent();
+    this.baseProxyUrl = process.env.PROXY_URL?.trim() || '';
+    this.currentProxyUrl = this.baseProxyUrl ? getDynamicProxyUrl(this.baseProxyUrl) : '';
+    const proxyAgent = this.currentProxyUrl ? createProxyAgent(this.currentProxyUrl) : undefined;
+    this.agent = proxyAgent ?? createDirectAgent();
     const defaultHeaders = buildDefaultHeaders(userAgent);
     this.client = createAxiosInstance(BASE_URL, this.agent, defaultHeaders);
     this.setSession(accessToken, cookies);
@@ -341,9 +388,39 @@ export class BlacklaneApi {
             new RateLimitError(undefined, retryAfter != null ? Number(retryAfter) : undefined)
           );
         }
+        if (status === 502 || status === 503) {
+          this.rotateProxySession('gateway');
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('ERR_TUNNEL_CONNECTION_FAILED') || msg.includes('ERR_PROXY_CONNECTION_FAILED')) {
+            this.rotateProxySession('tunnel');
+          }
+        }
         return Promise.reject(err);
       }
     );
+  }
+
+  /**
+   * Rotate proxy session locally (in-memory) for this API instance.
+   * Never mutates process.env.PROXY_URL (safe for concurrent bots).
+   */
+  rotateProxySession(reason: 'gateway' | 'tunnel'): void {
+    if (!this.baseProxyUrl) return;
+    const nextProxyUrl = getDynamicProxyUrl(this.baseProxyUrl);
+    const sessionLabel = getProxySessionLabelFromProxyUrl(nextProxyUrl);
+    const nextAgent = createProxyAgent(nextProxyUrl);
+    if (!nextAgent) return;
+
+    this.currentProxyUrl = nextProxyUrl;
+    this.agent = nextAgent;
+    this.client.defaults.httpsAgent = this.agent;
+
+    if (sessionLabel) {
+      logger.warn(`[NETWORK] Rotated API proxy ${sessionLabel} for ${this.label} (reason=${reason})`);
+    } else {
+      logger.warn(`[NETWORK] Rotated API proxy for ${this.label} (reason=${reason})`);
+    }
   }
 
   setSession(accessToken: string, cookies: AuthCookie[]): void {

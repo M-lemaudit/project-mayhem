@@ -21,6 +21,7 @@ async function main(): Promise<void> {
   try {
     const { accessToken, cookies, userAgent } = await loginAndGetToken(email, password);
     const api = new BlacklaneApi(
+      email,
       accessToken,
       cookies,
       userAgent,

@@ -572,6 +572,8 @@ export class SniperLoop {
                 `${this.logPrefix} Gateway error (${statusCode}) in sniper cycle. Count=${this.consecutiveGatewayErrors}.`,
                 err
               );
+              // Auto-heal: rotate proxy session so next cycle uses a fresh IP.
+              this.api.rotateProxySession('gateway');
 
               if (this.consecutiveGatewayErrors >= 3) {
                 console.error(

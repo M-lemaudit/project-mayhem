@@ -110,7 +110,7 @@ async function runBotInstance(
       throw new Error('blacklane_user_id is missing for bot ' + email + ' and auto-discovery failed.');
     }
 
-    const api = new BlacklaneApi(session.accessToken, session.cookies, session.userAgent, blacklaneUserId);
+    const api = new BlacklaneApi(email, session.accessToken, session.cookies, session.userAgent, blacklaneUserId);
     const rawFilters = await botState.getFilters();
     const filters: BotFilters = {
       minPrice: typeof rawFilters.minPrice === 'number' ? rawFilters.minPrice : 10,
