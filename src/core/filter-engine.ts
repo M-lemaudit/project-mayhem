@@ -768,7 +768,23 @@ export class FilterEngine {
       const startHour = filters.workingHoursStart;
       const endHour = filters.workingHoursEnd;
       if (typeof startHour === 'number' && typeof endHour === 'number') {
-        const offerLocalHour = offerStart.getHours();
+        let offerLocalHour = offerStart.getHours();
+        if (timezoneId && timezoneId.trim()) {
+          try {
+            const formatter = new Intl.DateTimeFormat('en-CA', {
+              timeZone: timezoneId.trim(),
+              hour: '2-digit',
+              hour12: false,
+            });
+            const hourStr = formatter.format(offerStart);
+            const parsed = parseInt(hourStr, 10);
+            if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 23) {
+              offerLocalHour = parsed;
+            }
+          } catch {
+            // fall back to server-local hour (offerStart.getHours())
+          }
+        }
         const insideWindow =
           startHour <= endHour
             ? offerLocalHour >= startHour && offerLocalHour < endHour

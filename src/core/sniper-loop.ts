@@ -15,7 +15,6 @@ const RATE_LIMIT_BACKOFF_SECONDS = 300; // 5 minutes
 const STOP_CHECK_INTERVAL_MS = 8_000; // pendant la pause rate-limit, vérifier le statut toutes les 8 s
 const DEFAULT_WORKING_HOURS_START = 6;
 const DEFAULT_WORKING_HOURS_END = 22;
-const SLEEP_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes when outside working hours
 const COFFEE_BREAK_MIN_REQUESTS = 50;
 const COFFEE_BREAK_MAX_REQUESTS = 100;
 const COFFEE_BREAK_MIN_MS = 2 * 60 * 1000; // 2 minutes
@@ -220,29 +219,6 @@ function logRawOffersResponse(prefix: string, data: unknown, offers: OfferShape[
 }
 
 /** Current local hour (0-23) on the server. */
-function getCurrentLocalHour(): number {
-  return new Date().getHours();
-}
-
-/** Current hour (0-23) in the given IANA timezone (e.g. Europe/Paris). Falls back to server local if invalid. */
-function getCurrentHourInTimezone(timezoneId: string): number {
-  const tz = timezoneId?.trim();
-  if (!tz) return getCurrentLocalHour();
-  try {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: tz,
-      hour: '2-digit',
-      hour12: false,
-    });
-    const hourStr = formatter.format(new Date());
-    const hour = parseInt(hourStr, 10);
-    if (Number.isNaN(hour) || hour < 0 || hour > 23) return getCurrentLocalHour();
-    return hour;
-  } catch {
-    return getCurrentLocalHour();
-  }
-}
-
 /** Format current date/time in the given IANA timezone for display (e.g. "26/02/2025 14:32:05 Europe/Paris"). */
 function formatNowInTimezone(timezoneId: string): string {
   try {
@@ -276,18 +252,6 @@ function formatRideDateTime(iso: string | undefined, timezoneId?: string): strin
   } catch {
     return d.toLocaleString('fr-FR');
   }
-}
-
-/** True if current time is inside [workingHoursStart, workingHoursEnd) (end exclusive). Uses client timezone when provided. */
-function isInsideWorkingHours(
-  start: number,
-  end: number,
-  timezoneId?: string
-): boolean {
-  const hour = timezoneId ? getCurrentHourInTimezone(timezoneId) : getCurrentLocalHour();
-  if (start <= end) return hour >= start && hour < end;
-  // e.g. 22–6: inside if hour >= 22 || hour < 6
-  return hour >= start || hour < end;
 }
 
 /**
@@ -421,26 +385,8 @@ export class SniperLoop {
             }
           }
 
-          const startHour = filters.workingHoursStart ?? DEFAULT_WORKING_HOURS_START;
-          const endHour = filters.workingHoursEnd ?? DEFAULT_WORKING_HOURS_END;
-          if (!isInsideWorkingHours(startHour, endHour, this.timezoneId)) {
-            const tzLabel = this.timezoneId ? ` (${this.timezoneId})` : '';
-            console.log(
-              `${this.logPrefix} 💤 Sleeping until ${startHour}:00${tzLabel}...`
-            );
-            if (this.botState) {
-              await this.botState.updateStatus('SLEEPING').catch(() => {});
-            }
-            await sleep(SLEEP_CHECK_INTERVAL_MS);
-            continue;
-          }
-
-          if (this.botState) {
-            const status = await this.botState.getStatus();
-            if (status === 'SLEEPING') {
-              await this.botState.updateStatus('RUNNING').catch(() => {});
-            }
-          }
+          // Bot runs 24/7: working hours are enforced as an offer acceptance filter (in FilterEngine),
+          // not as a loop sleep schedule. Coffee breaks are still applied below.
 
           if (requestCount >= nextCoffeeBreakAt) {
             const breakMs =
