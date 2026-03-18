@@ -51,20 +51,24 @@ function generateRandomSessionId(length = 8): string {
 
 function getDynamicProxyUrl(baseProxyUrl: string): string {
   const url = new URL(baseProxyUrl);
+  const sessionRegex = /(session-)[A-Za-z0-9]+/;
   const decodedUsername = url.username ? decodeURIComponent(url.username) : '';
-  const rotatedUsername = decodedUsername.replace(
-    /(session-)[A-Za-z0-9]+/,
-    `$1${generateRandomSessionId()}`
-  );
-  if (rotatedUsername) {
-    url.username = rotatedUsername;
+  const decodedPassword = url.password ? decodeURIComponent(url.password) : '';
+
+  if (decodedUsername && sessionRegex.test(decodedUsername)) {
+    url.username = decodedUsername.replace(sessionRegex, `$1${generateRandomSessionId()}`);
+  } else if (decodedPassword && sessionRegex.test(decodedPassword)) {
+    url.password = decodedPassword.replace(sessionRegex, `$1${generateRandomSessionId()}`);
+  } else {
+    // Fallback: rotate if session token appears elsewhere in the URL string.
+    return baseProxyUrl.replace(sessionRegex, `$1${generateRandomSessionId()}`);
   }
   return url.toString();
 }
 
-function getProxySessionLabel(username: string | undefined): string | undefined {
-  if (!username) return undefined;
-  const match = username.match(/session-[A-Za-z0-9]+/);
+function getProxySessionLabel(proxyUrlOrCreds: string | undefined): string | undefined {
+  if (!proxyUrlOrCreds) return undefined;
+  const match = proxyUrlOrCreds.match(/session-[A-Za-z0-9]+/);
   return match?.[0];
 }
 
@@ -282,9 +286,11 @@ export async function loginAndGetToken(
     const baseProxyUrl = process.env.PROXY_URL?.trim();
     const localProxyUrl = baseProxyUrl ? getDynamicProxyUrl(baseProxyUrl) : undefined;
     const proxy = localProxyUrl ? getPlaywrightProxyFromUrl(localProxyUrl) : undefined;
-    const sessionLabel = proxy?.username ? getProxySessionLabel(proxy.username) : undefined;
-    if (sessionLabel) {
-      logger.info(`[AUTH] Using proxy ${sessionLabel} for ${email} (Attempt ${attempt + 1}/${maxAttempts})`);
+    const sessionLabel = localProxyUrl ? getProxySessionLabel(localProxyUrl) : undefined;
+    if (localProxyUrl && sessionLabel) {
+      logger.info(
+        `[AUTH] Using proxy ${sessionLabel} for ${email} (Attempt ${attempt + 1}/${maxAttempts}) — ${localProxyUrl}`
+      );
     }
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 

@@ -71,13 +71,16 @@ function generateRandomSessionId(length = 8): string {
 
 function getDynamicProxyUrl(baseProxyUrl: string): string {
   const url = new URL(baseProxyUrl);
+  const sessionRegex = /(session-)[A-Za-z0-9]+/;
   const decodedUsername = url.username ? decodeURIComponent(url.username) : '';
-  const rotatedUsername = decodedUsername.replace(
-    /(session-)[A-Za-z0-9]+/,
-    `$1${generateRandomSessionId()}`
-  );
-  if (rotatedUsername) {
-    url.username = rotatedUsername;
+  const decodedPassword = url.password ? decodeURIComponent(url.password) : '';
+
+  if (decodedUsername && sessionRegex.test(decodedUsername)) {
+    url.username = decodedUsername.replace(sessionRegex, `$1${generateRandomSessionId()}`);
+  } else if (decodedPassword && sessionRegex.test(decodedPassword)) {
+    url.password = decodedPassword.replace(sessionRegex, `$1${generateRandomSessionId()}`);
+  } else {
+    return baseProxyUrl.replace(sessionRegex, `$1${generateRandomSessionId()}`);
   }
   return url.toString();
 }
@@ -86,7 +89,8 @@ function getProxySessionLabelFromProxyUrl(proxyUrl: string): string | undefined 
   try {
     const url = new URL(proxyUrl);
     const username = url.username ? decodeURIComponent(url.username) : '';
-    const match = username.match(/session-[A-Za-z0-9]+/);
+    const password = url.password ? decodeURIComponent(url.password) : '';
+    const match = (username + ' ' + password).match(/session-[A-Za-z0-9]+/);
     return match?.[0];
   } catch {
     return undefined;
@@ -425,9 +429,11 @@ export class BlacklaneApi {
     this.client.defaults.httpsAgent = this.agent;
 
     if (sessionLabel) {
-      logger.warn(`[NETWORK] Rotated API proxy ${sessionLabel} for ${this.label} (reason=${reason})`);
+      logger.warn(
+        `[NETWORK] Rotated API proxy ${sessionLabel} for ${this.label} (reason=${reason}) — ${nextProxyUrl}`
+      );
     } else {
-      logger.warn(`[NETWORK] Rotated API proxy for ${this.label} (reason=${reason})`);
+      logger.warn(`[NETWORK] Rotated API proxy for ${this.label} (reason=${reason}) — ${nextProxyUrl}`);
     }
   }
 
