@@ -412,6 +412,14 @@ export class BlacklaneApi {
     const nextAgent = createProxyAgent(nextProxyUrl);
     if (!nextAgent) return;
 
+    // Best-effort: ensure we don't keep reusing pooled sockets from the previous agent.
+    // HttpsProxyAgent extends http.Agent and supports destroy().
+    try {
+      (this.agent as unknown as { destroy?: () => void }).destroy?.();
+    } catch {
+      // ignore
+    }
+
     this.currentProxyUrl = nextProxyUrl;
     this.agent = nextAgent;
     this.client.defaults.httpsAgent = this.agent;

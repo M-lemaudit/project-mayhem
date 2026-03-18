@@ -580,8 +580,12 @@ export class SniperLoop {
                   `${this.logPrefix} Gateway error (${statusCode}) occurred 3 times in a row → marking bot as ERROR_AUTH.`
                 );
                 if (this.botState) {
+                  // Force a clean re-auth cycle by clearing the saved session.
+                  await this.botState.saveSession({}).catch(() => {});
                   await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
                 }
+                // Break out: let Fleet Manager restart and re-auth with Playwright.
+                throw new TokenExpiredError('Gateway errors persisted after proxy rotation');
               }
             } else {
               this.consecutiveGatewayErrors = 0;
