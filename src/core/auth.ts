@@ -4,6 +4,8 @@
  */
 
 import type { Page } from 'playwright-core';
+import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -234,6 +236,25 @@ export function isSavedSessionUsable(saved: unknown): saved is SavedSession {
   );
 }
 
+async function captureLoginErrorScreenshot(page: Page, email: string): Promise<string | undefined> {
+  try {
+    const screenshotsDir = path.join(process.cwd(), 'login-error');
+    await fs.promises.mkdir(screenshotsDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeEmail = email.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const fileName = `${timestamp}-${safeEmail}.png`;
+    const fullPath = path.join(screenshotsDir, fileName);
+    await page.screenshot({ path: fullPath, fullPage: true });
+    logger.error(`[AUTH] Saved login error screenshot for ${email} at ${fullPath}`);
+    return fullPath;
+  } catch (err) {
+    logger.warn('[AUTH] Failed to capture login error screenshot', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
 /**
  * Reconstruct AuthResult from a saved session. Call only when isSavedSessionUsable is true.
  */
@@ -281,6 +302,7 @@ export async function loginAndGetToken(
 
   const maxAttempts = 3;
   let lastError: unknown;
+  let invalidLoginAttempts = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const baseProxyUrl = process.env.PROXY_URL?.trim();
@@ -293,6 +315,7 @@ export async function loginAndGetToken(
       );
     }
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+    let page: Page | undefined;
 
     try {
       browser = await chromium.launch({
@@ -308,7 +331,7 @@ export async function loginAndGetToken(
         viewport: { width: 1280, height: 800 },
         ignoreHTTPSErrors: false,
       });
-      const page = await context.newPage();
+      page = await context.newPage();
 
       const response = await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: LOGIN_TIMEOUT_MS });
       const status = response?.status();
@@ -399,8 +422,23 @@ export async function loginAndGetToken(
       const isTunnelOrProxyError =
         message.includes('ERR_TUNNEL_CONNECTION_FAILED') ||
         message.includes('ERR_PROXY_CONNECTION_FAILED');
-      const isGatewayError =
-        /\b502\b/.test(message);
+      const isGatewayError = /\b502\b/.test(message);
+
+      if (error instanceof AuthError && error.code === 'INVALID_CREDENTIALS') {
+        invalidLoginAttempts += 1;
+        if (invalidLoginAttempts >= 2 && page) {
+          await captureLoginErrorScreenshot(page, email);
+        }
+        if (invalidLoginAttempts < 2 && attempt + 1 < maxAttempts) {
+          logger.warn(
+            `[AUTH] Login stuck on page for ${email}. Retrying Playwright login (Attempt ${
+              attempt + 2
+            }/${maxAttempts})...`
+          );
+          continue;
+        }
+        throw error;
+      }
 
       const shouldRetry = isTunnelOrProxyError || isGatewayError;
       if (!shouldRetry || attempt + 1 >= maxAttempts) {
