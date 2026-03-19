@@ -93,6 +93,9 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
         allowedAirportDirections: (raw as any).allowedAirportDirections as string[],
       }),
     // Allowed airlines: prefer new field, fallback to legacy includedAirlines.
+    // NOTE: Despite the historical name `allowedAirlines`, this list is now interpreted
+    // as a BLOCKLIST in FilterEngine: if a flight_number matches one of these codes,
+    // the offer is rejected. An empty list means "do not block any airline".
     ...(Array.isArray((raw as any).allowedAirlines) &&
       (raw as any).allowedAirlines.length > 0 && {
         allowedAirlines: ((raw as any).allowedAirlines as string[]).map((c) =>
@@ -109,6 +112,9 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
         }
       : {}),
     // City filters: split into pickup/dropoff; fallback to legacy allowedZipCodes/blockedZipCodes.
+    // NOTE: `allowedPickupCities` / `allowedDropoffCities` are also interpreted as BLOCKLISTS
+    // in FilterEngine: if the resolved pickup/dropoff city is in the list, the offer is rejected.
+    // Empty lists mean "no city is blocked" (all pickup/dropoff cities are allowed).
     ...(Array.isArray((raw as any).allowedPickupCities) &&
       (raw as any).allowedPickupCities.length > 0 && {
         allowedPickupCities: (raw as any).allowedPickupCities as string[],

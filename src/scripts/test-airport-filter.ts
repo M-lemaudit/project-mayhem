@@ -56,6 +56,7 @@ async function main(): Promise<void> {
     minPrice: 0,
     allowedVehicleTypes: [],
     allowedAirportDirections: ['pickup', 'dropoff'],
+    // NOTE: This list is now a BLOCKLIST: any matching airline code will cause rejection.
     allowedAirlines: ['AF', 'DAL'],
   };
 
@@ -103,9 +104,9 @@ async function main(): Promise<void> {
     baseFilters
   );
 
-  // 5) flight_number present, allowedAirlines empty => PASS
+  // 5) flight_number present, allowedAirlines empty (no airlines blocked) => PASS
   runCase(
-    'flight_number present, allowedAirlines empty',
+    'flight_number present, blocklist empty => PASS',
     makeOffer('5', 'p5', 'd5', 'dal123'),
     [
       makeLocation('p5', { tags: ['city'], formatted_address_en: 'City A' }),
@@ -114,9 +115,9 @@ async function main(): Promise<void> {
     { ...baseFilters, allowedAirlines: [] }
   );
 
-  // 6) flight_number matches allowedAirlines (startsWith)
+  // 6) flight_number matches allowedAirlines blocklist (startsWith) => FAIL
   runCase(
-    'flight_number matches allowedAirlines (startsWith)',
+    'flight_number matches blockedAirlines (startsWith) => FAIL',
     makeOffer('6', 'p6', 'd6', 'AF1234'),
     [
       makeLocation('p6', { tags: ['city'], formatted_address_en: 'City A' }),
@@ -125,13 +126,24 @@ async function main(): Promise<void> {
     baseFilters
   );
 
-  // 7) flight_number does NOT match allowedAirlines => FAIL
+  // 7) flight_number does NOT match allowedAirlines blocklist => PASS
   runCase(
-    'flight_number not in allowedAirlines',
+    'flight_number not in blockedAirlines => PASS',
     makeOffer('7', 'p7', 'd7', 'LH999'),
     [
       makeLocation('p7', { tags: ['city'], formatted_address_en: 'City A' }),
       makeLocation('d7', { tags: ['city'], formatted_address_en: 'City B' }),
+    ],
+    baseFilters
+  );
+
+  // 8) flight_number matches blockedAirlines via includes (not only prefix) => FAIL
+  runCase(
+    'flight_number contains blockedAirline code => FAIL',
+    makeOffer('8', 'p8', 'd8', 'XXAFYY'),
+    [
+      makeLocation('p8', { tags: ['city'], formatted_address_en: 'City A' }),
+      makeLocation('d8', { tags: ['city'], formatted_address_en: 'City B' }),
     ],
     baseFilters
   );

@@ -29,15 +29,22 @@ export interface BotFilters {
   rideType?: string;
   /** Directions where airport legs are allowed: ['pickup'], ['dropoff'], or ['pickup','dropoff']. */
   allowedAirportDirections?: string[];
-  /** Airline codes allowed when a flight_number is present (e.g. ["DAL","AF"]). Empty = accept all airlines. */
+  /**
+   * Airline codes to BLOCK when a flight_number is present (e.g. ["DAL","AF"]).
+   * Empty = do not block any airline (accept all airlines).
+   */
   allowedAirlines?: string[];
   /** ZIP/postal codes the chauffeur allows. Empty = accept all. */
   allowedZipCodes?: string[];
   /** ZIP/postal codes the chauffeur blocks. Empty = block none. */
   blockedZipCodes?: string[];
-  /** Pickup cities whitelist. Empty = all pickup cities allowed. */
+  /**
+   * Pickup cities to BLOCK. Empty = do not block any pickup city (all pickup cities allowed).
+   */
   allowedPickupCities?: string[];
-  /** Dropoff cities whitelist. Empty = all dropoff cities allowed. */
+  /**
+   * Dropoff cities to BLOCK. Empty = do not block any dropoff city (all dropoff cities allowed).
+   */
   allowedDropoffCities?: string[];
   /** Dates (YYYY-MM-DD, in bot timezone) where rides must be rejected. */
   blackoutDates?: string[];
@@ -933,35 +940,35 @@ export class FilterEngine {
         : '';
 
     if (flightNumber && allowedAirlines && allowedAirlines.length > 0) {
-      const allowedUpper = allowedAirlines
+      const blockedUpper = allowedAirlines
         .map((c) => (typeof c === 'string' ? c.trim().toUpperCase() : ''))
         .filter((c) => c.length > 0);
 
-      const matched = allowedUpper.some(
+      const isBlocked = blockedUpper.some(
         (code) => flightNumber.startsWith(code) || flightNumber.includes(code)
       );
 
       traceCompare({
         offerId,
-        filterName: 'allowedAirlines',
-        op: 'startsWith/includes',
+        filterName: 'blockedAirlines',
+        op: 'not-in-blocklist',
         leftLabel: 'flight_number',
         leftValue: flightNumber,
-        rightLabel: 'allowedAirlines',
-        rightValue: allowedUpper,
-        passed: matched,
+        rightLabel: 'blockedAirlines',
+        rightValue: blockedUpper,
+        passed: !isBlocked,
       });
 
-      if (!matched) {
+      if (isBlocked) {
         const res = fail(
-          'allowedAirlines',
-          `Flight number '${flightNumber}' not allowed by allowedAirlines filter`,
+          'blockedAirlines',
+          `Flight number '${flightNumber}' is blocked by airlines filter`,
           {
-            op: 'startsWith/includes',
+            op: 'in-blocklist',
             leftLabel: 'flight_number',
             leftValue: flightNumber,
-            rightLabel: 'allowedAirlines',
-            rightValue: allowedUpper,
+            rightLabel: 'blockedAirlines',
+            rightValue: blockedUpper,
           }
         );
         if (res) return res;
@@ -976,26 +983,26 @@ export class FilterEngine {
       typeof c === 'string' ? c.trim().toLowerCase() : ''
     ).filter(Boolean);
     if (allowedPickupCities.length > 0) {
-      const pickupAllowed = allowedPickupCities.includes(pickupCity);
+      const pickupBlocked = allowedPickupCities.includes(pickupCity);
       traceCompare({
         offerId,
-        filterName: 'allowedPickupCities',
-        op: 'includes',
+        filterName: 'blockedPickupCities',
+        op: 'not-in-blocklist',
         leftLabel: 'pickupCity',
         leftValue: pickupCity,
-        rightLabel: 'allowedPickupCities',
+        rightLabel: 'blockedPickupCities',
         rightValue: allowedPickupCities,
-        passed: pickupAllowed,
+        passed: !pickupBlocked,
       });
-      if (!pickupAllowed) {
+      if (pickupBlocked) {
         const res = fail(
-          'allowedPickupCities',
-          `Pickup city '${pickupCity || 'unknown'}' not in allowedPickupCities [${allowedPickupCities.join(', ')}]`,
+          'blockedPickupCities',
+          `Pickup city '${pickupCity || 'unknown'}' is blocked by pickup city filter`,
           {
-            op: 'includes',
+            op: 'in-blocklist',
             leftLabel: 'pickupCity',
             leftValue: pickupCity,
-            rightLabel: 'allowedPickupCities',
+            rightLabel: 'blockedPickupCities',
             rightValue: allowedPickupCities,
           }
         );
@@ -1007,26 +1014,26 @@ export class FilterEngine {
       typeof c === 'string' ? c.trim().toLowerCase() : ''
     ).filter(Boolean);
     if (allowedDropoffCities.length > 0) {
-      const dropoffAllowed = allowedDropoffCities.includes(dropoffCity);
+      const dropoffBlocked = allowedDropoffCities.includes(dropoffCity);
       traceCompare({
         offerId,
-        filterName: 'allowedDropoffCities',
-        op: 'includes',
+        filterName: 'blockedDropoffCities',
+        op: 'not-in-blocklist',
         leftLabel: 'dropoffCity',
         leftValue: dropoffCity,
-        rightLabel: 'allowedDropoffCities',
+        rightLabel: 'blockedDropoffCities',
         rightValue: allowedDropoffCities,
-        passed: dropoffAllowed,
+        passed: !dropoffBlocked,
       });
-      if (!dropoffAllowed) {
+      if (dropoffBlocked) {
         const res = fail(
-          'allowedDropoffCities',
-          `Dropoff city '${dropoffCity || 'unknown'}' not in allowedDropoffCities [${allowedDropoffCities.join(', ')}]`,
+          'blockedDropoffCities',
+          `Dropoff city '${dropoffCity || 'unknown'}' is blocked by dropoff city filter`,
           {
-            op: 'includes',
+            op: 'in-blocklist',
             leftLabel: 'dropoffCity',
             leftValue: dropoffCity,
-            rightLabel: 'allowedDropoffCities',
+            rightLabel: 'blockedDropoffCities',
             rightValue: allowedDropoffCities,
           }
         );

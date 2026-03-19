@@ -755,7 +755,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                     <h3 className="text-white text-lg font-bold">Airport & Airline Rules</h3>
                   </div>
                   <p className="text-slate-400 text-xs mb-6">
-                    Control which airport legs are allowed (pickup / dropoff) and which airlines are accepted for flights.
+                    Control which airport legs are allowed (pickup / dropoff) and which airlines are blocked for flights.
                   </p>
                   <div className="space-y-6">
                     <div className="flex flex-col gap-2">
@@ -785,7 +785,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                     </div>
                     <div className="flex flex-col gap-2">
                       <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        Allowed Airlines (flight codes)
+                        Blocked Airlines (flight codes)
                       </label>
                       <form
                         onSubmit={(e) => {
@@ -812,7 +812,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                     {allowedAirlines.length === 0 ? (
                       <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
                         <p className="text-xs text-slate-500 italic">
-                          No airline codes configured. Bot will accept all airlines when a flight number is present.
+                          No blocked airline codes configured. Bot will accept all airlines when a flight number is present.
                         </p>
                       </div>
                     ) : (
@@ -842,31 +842,33 @@ export default function AccountPage({ params }: AccountPageProps) {
                     <span className="material-symbols-outlined text-[#d4af35]">pincode</span>
                     <h3 className="text-white text-lg font-bold">City Management</h3>
                   </div>
-                  <p className="text-slate-400 text-xs mb-8">Restrict offers based on pickup and drop-off city. Empty lists mean all cities are allowed for that direction.</p>
+                  <p className="text-slate-400 text-xs mb-8">
+                    Block offers based on pickup and drop-off city. Empty lists mean no cities are blocked for that direction (all are allowed).
+                  </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-4">
-                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+                      <label className="text-sm font-semibold text-rose-400 flex items-center gap-2">
                         <span className="material-symbols-outlined text-sm">verified</span>
-                        Allowed Pickup Cities
+                        Blocked Pickup Cities
                       </label>
                       <form onSubmit={(e) => { e.preventDefault(); addPickupCity(); }} className="flex gap-2">
                         <input
                           value={pickupCityInput}
                           onChange={(e) => setPickupCityInput(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-rose-500"
                           placeholder="Enter pickup city (e.g. Orlando)" type="text"
                         />
-                        <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
+                        <button type="submit" className="px-4 py-2 bg-rose-500/10 border border-rose-500/20 rounded-lg text-sm font-bold text-rose-400 hover:bg-rose-500/20">Add</button>
                       </form>
                       {allowedPickupCities.length === 0 ? (
                         <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No pickup cities configured. All pickup cities are allowed.</p>
+                          <p className="text-xs text-slate-500 italic">No blocked pickup cities configured. All pickup cities are allowed.</p>
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {allowedPickupCities.map(city => (
-                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
-                              <span className="text-emerald-400 font-medium">{city}</span>
+                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-rose-500/20 rounded-lg text-xs">
+                              <span className="text-rose-400 font-medium">{city}</span>
                               <button onClick={() => removePickupCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
                             </div>
                           ))}
@@ -874,28 +876,28 @@ export default function AccountPage({ params }: AccountPageProps) {
                       )}
                     </div>
                     <div className="space-y-4">
-                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+                      <label className="text-sm font-semibold text-rose-400 flex items-center gap-2">
                         <span className="material-symbols-outlined text-sm">verified</span>
-                        Allowed Dropoff Cities
+                        Blocked Dropoff Cities
                       </label>
                       <form onSubmit={(e) => { e.preventDefault(); addDropoffCity(); }} className="flex gap-2">
                         <input
                           value={dropoffCityInput}
                           onChange={(e) => setDropoffCityInput(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-rose-500"
                           placeholder="Enter dropoff city (e.g. Orlando)" type="text"
                         />
-                        <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
+                        <button type="submit" className="px-4 py-2 bg-rose-500/10 border border-rose-500/20 rounded-lg text-sm font-bold text-rose-400 hover:bg-rose-500/20">Add</button>
                       </form>
                       {allowedDropoffCities.length === 0 ? (
                         <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No dropoff cities configured. All dropoff cities are allowed.</p>
+                          <p className="text-xs text-slate-500 italic">No blocked dropoff cities configured. All dropoff cities are allowed.</p>
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {allowedDropoffCities.map(city => (
-                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
-                              <span className="text-emerald-400 font-medium">{city}</span>
+                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-rose-500/20 rounded-lg text-xs">
+                              <span className="text-rose-400 font-medium">{city}</span>
                               <button onClick={() => removeDropoffCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
                             </div>
                           ))}
