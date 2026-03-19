@@ -152,6 +152,7 @@ export class BotStateService {
     if (error) {
       throw new Error(`BotStateService.updateStatus: ${error.message}`);
     }
+    logger.info(`[${this.email}] Status updated`, { status });
   }
 
   /** Records a matching offer so the admin can show a notification (simulation mode). */

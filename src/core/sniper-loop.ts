@@ -22,6 +22,7 @@ const COFFEE_BREAK_MAX_MS = 5 * 60 * 1000; // 5 minutes
 const PROCESSED_OFFER_IDS_MAX = 500;
 const MATCH_COOLDOWN_MIN_MS = 5 * 1000; // 5 seconds
 const MATCH_COOLDOWN_MAX_MS = 10 * 1000; // 10 seconds
+const MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH = 2;
 
 function getTodayIsoDateInTimezone(timezoneId?: string): string {
   const tz = timezoneId?.trim();
@@ -276,6 +277,8 @@ export class SniperLoop {
   private readonly timezoneId: string | undefined;
   /** Consecutive gateway errors (5xx like 502/503) seen in the hot loop. */
   private consecutiveGatewayErrors = 0;
+  /** Consecutive non-gateway runtime errors without dedicated retry policy. */
+  private consecutiveUnknownErrors = 0;
   /** Last local (bot timezone) date when blackoutDates pruning ran. */
   private lastBlackoutPruneIsoDate: string | null = null;
 
@@ -509,6 +512,7 @@ export class SniperLoop {
           if (this.botState && cycleCount % HEARTBEAT_INTERVAL_CYCLES === 0) {
             await this.botState.updateHeartbeat();
           }
+          this.consecutiveUnknownErrors = 0;
 
           if (!this.isRunning) break;
           const { sniper_delay_min_ms, sniper_delay_max_ms } = await getGlobalSettings();
@@ -517,8 +521,16 @@ export class SniperLoop {
           if (err instanceof TokenExpiredError) {
             console.log(`${this.logPrefix} Session expired.`);
             if (this.botState) {
-              await this.botState.saveSession({}).catch(() => {});
-              await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
+              await this.botState.saveSession({}).catch((saveErr) => {
+                logger.warn(`${this.logPrefix} Failed to clear session after token expiry`, {
+                  err: saveErr,
+                });
+              });
+              await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
+                logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH after token expiry`, {
+                  err: statusErr,
+                });
+              });
             }
             throw err;
           } else if (err instanceof RateLimitError) {
@@ -531,7 +543,11 @@ export class SniperLoop {
             console.log(
               `${this.logPrefix} Rate limit hit → pausing for ${backoffSeconds}s (resume at ${resumeAt.toLocaleTimeString()}, stop checked every 8s).`
             );
-            if (this.botState) await this.botState.updateStatus('PAUSED_RATE_LIMIT').catch(() => {});
+            if (this.botState) {
+              await this.botState.updateStatus('PAUSED_RATE_LIMIT').catch((statusErr) => {
+                logger.warn(`${this.logPrefix} Failed to set PAUSED_RATE_LIMIT`, { err: statusErr });
+              });
+            }
 
             while (Date.now() < rateLimitEnd && this.isRunning) {
               const remainingMs = rateLimitEnd - Date.now();
@@ -552,9 +568,14 @@ export class SniperLoop {
             console.log(`${this.logPrefix} Rate limit pause finished → resuming.`);
             const status = this.botState ? await this.botState.getStatus() : 'RUNNING';
             if (status !== 'STOPPED' && this.botState) {
-              await this.botState.updateStatus('RUNNING').catch(() => {});
+              await this.botState.updateStatus('RUNNING').catch((statusErr) => {
+                logger.warn(`${this.logPrefix} Failed to restore RUNNING after rate limit pause`, {
+                  err: statusErr,
+                });
+              });
             }
           } else if (err instanceof InvalidOfferStateError) {
+            this.consecutiveUnknownErrors = 0;
             const message = err instanceof Error && err.message ? err.message : 'invalid offer state (410)';
             console.log(
               `${this.logPrefix} Offer not accepted (invalid state / already taken). Continuing sniper loop. Detail: ${message}`
@@ -573,6 +594,7 @@ export class SniperLoop {
                 : undefined;
 
             if (statusCode === 502 || statusCode === 503) {
+              this.consecutiveUnknownErrors = 0;
               this.consecutiveGatewayErrors += 1;
               console.error(
                 `${this.logPrefix} Gateway error (${statusCode}) in sniper cycle. Count=${this.consecutiveGatewayErrors}.`,
@@ -591,15 +613,40 @@ export class SniperLoop {
               }
             } else {
               this.consecutiveGatewayErrors = 0;
-              console.error(`${this.logPrefix} Erreur cycle:`, err);
-              if (this.botState) await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
+              this.consecutiveUnknownErrors += 1;
+              console.error(
+                `${this.logPrefix} Erreur cycle (${this.consecutiveUnknownErrors}/${MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH}):`,
+                err
+              );
+              logger.error(`${this.logPrefix} Unhandled sniper cycle error`, {
+                consecutiveUnknownErrors: this.consecutiveUnknownErrors,
+                err,
+              });
+              if (this.consecutiveUnknownErrors < MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH) {
+                logger.warn(
+                  `${this.logPrefix} Will retry unknown cycle error before marking ERROR_AUTH.`
+                );
+                continue;
+              }
+              if (this.botState) {
+                await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
+                  logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH after repeated unknown errors`, {
+                    err: statusErr,
+                  });
+                });
+              }
+              throw err;
             }
           }
         }
       }
     } catch (err) {
       if (this.botState) {
-        await this.botState.updateStatus('ERROR_AUTH').catch(() => {});
+        await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
+          logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH in top-level sniper catch`, {
+            err: statusErr,
+          });
+        });
       }
       throw err;
     } finally {

@@ -19,6 +19,7 @@ if (proxyUrl) {
 
 const WATCHDOG_INTERVAL_MS = 10_000;
 const RIDE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_IMMEDIATE_FATAL_ERRORS = 2;
 
 export interface RunningBotRow {
   id: string;
@@ -33,7 +34,11 @@ export interface RunningBotRow {
 }
 
 /** Fetches all bots with status RUNNING from Supabase. */
-async function fetchActiveBots(): Promise<RunningBotRow[]> {
+type ActiveBotsResult =
+  | { ok: true; bots: RunningBotRow[] }
+  | { ok: false; error: Error };
+
+async function fetchActiveBots(): Promise<ActiveBotsResult> {
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from('bots')
@@ -41,11 +46,10 @@ async function fetchActiveBots(): Promise<RunningBotRow[]> {
     .eq('status', 'RUNNING');
 
   if (error) {
-    logger.error('Fleet: failed to fetch active bots', { error: error.message });
-    return [];
+    return { ok: false, error: new Error(`Fleet: failed to fetch active bots: ${error.message}`) };
   }
 
-  return (data ?? []) as RunningBotRow[];
+  return { ok: true, bots: (data ?? []) as RunningBotRow[] };
 }
 
 /** Resolves plaintext password (decrypt if encrypted). */
@@ -80,6 +84,7 @@ async function runBotInstance(
 
   let reauthAttempts = 0;
   const maxReauthAttempts = 1;
+  let consecutiveImmediateFatalErrors = 0;
 
   try {
     while (true) {
@@ -139,7 +144,11 @@ async function runBotInstance(
         const rideSync = new RideSyncService(supabase, bot.id);
         await rideSync.sync(api);
         rideSyncInterval = setInterval(() => {
-          rideSync.sync(api).catch(() => {});
+          rideSync.sync(api).catch((syncError) => {
+            logger.warn(`${prefix()} RideSync interval failed`, {
+              err: syncError,
+            });
+          });
         }, RIDE_SYNC_INTERVAL_MS);
 
         logger.info(`${prefix()} Sniper started (Stop = dashboard).`);
@@ -148,6 +157,7 @@ async function runBotInstance(
         instances.set(email, sniper);
 
         await sniper.start();
+        consecutiveImmediateFatalErrors = 0;
         break;
       } catch (err) {
         if (rideSyncInterval != null) clearInterval(rideSyncInterval);
@@ -159,10 +169,13 @@ async function runBotInstance(
           logger.warn(
             `${prefix()} Gateway persisted → attempting Playwright re-auth (Attempt ${reauthAttempts}/${maxReauthAttempts})`
           );
-          await botState.saveSession({}).catch(() => {});
+          await botState.saveSession({}).catch((saveErr) => {
+            logger.warn(`${prefix()} Failed to clear session during reauth`, { err: saveErr });
+          });
           continue;
         }
 
+        consecutiveImmediateFatalErrors += 1;
         const message = err instanceof Error ? err.message : String(err);
         const errorLog =
           err instanceof Error
@@ -174,11 +187,29 @@ async function runBotInstance(
           .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
           .replace(/\\/g, '/');
         const errorLogLines = errorLogDisplay.split('\n').filter((l) => l.trim().length > 0);
-        logger.error(`${prefix()} Error:`, { err: message });
+        logger.error(`${prefix()} Error in bot instance`, {
+          botId: bot.id,
+          email,
+          consecutiveImmediateFatalErrors,
+          err,
+        });
+        const shouldMarkErrorNow = consecutiveImmediateFatalErrors >= MAX_IMMEDIATE_FATAL_ERRORS;
+
+        if (!shouldMarkErrorNow) {
+          logger.warn(
+            `${prefix()} Immediate fatal error attempt ${consecutiveImmediateFatalErrors}/${MAX_IMMEDIATE_FATAL_ERRORS}; retrying before marking bot as error.`
+          );
+          continue;
+        }
+
         if (err instanceof AuthError && err.code === 'INVALID_CREDENTIALS') {
-          await botState.updateStatus('STOPPED').catch(() => {});
+          await botState.updateStatus('STOPPED').catch((statusErr) => {
+            logger.warn(`${prefix()} Failed to set STOPPED status`, { err: statusErr });
+          });
         } else {
-          await botState.updateStatus('ERROR_AUTH').catch(() => {});
+          await botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
+            logger.warn(`${prefix()} Failed to set ERROR_AUTH status`, { err: statusErr });
+          });
         }
         let reason: Parameters<typeof triggerAuthErrorWebhook>[2] = 'unknown';
         let explanation: string | undefined;
@@ -231,7 +262,14 @@ async function syncFleet(
   instances: Map<string, SniperLoop>,
   pendingStarts: Set<string>
 ): Promise<void> {
-  const active = await fetchActiveBots();
+  const activeResult = await fetchActiveBots();
+  if (!activeResult.ok) {
+    logger.error('Fleet: skipping sync tick after Supabase polling failure', {
+      err: activeResult.error,
+    });
+    return;
+  }
+  const active = activeResult.bots;
   const activeEmails = new Set(active.map((b) => b.email));
   const activeIds = new Set(active.map((b) => b.id));
 
@@ -254,6 +292,17 @@ async function syncFleet(
   prevRunningBotIds = activeIds;
 }
 
+async function syncFleetSafe(
+  instances: Map<string, SniperLoop>,
+  pendingStarts: Set<string>
+): Promise<void> {
+  try {
+    await syncFleet(instances, pendingStarts);
+  } catch (err) {
+    logger.error('Fleet: sync tick crashed', { err });
+  }
+}
+
 async function runFleet(): Promise<void> {
   const instances = new Map<string, SniperLoop>();
   const pendingStarts = new Set<string>();
@@ -268,16 +317,22 @@ async function runFleet(): Promise<void> {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled promise rejection in fleet process', { err: reason });
+  });
+  process.on('uncaughtException', (error) => {
+    logger.error('Uncaught exception in fleet process', { err: error });
+  });
 
   logger.info('Fleet Manager started. Watching for RUNNING bots every 10s.');
-  await syncFleet(instances, pendingStarts);
+  await syncFleetSafe(instances, pendingStarts);
 
   setInterval(() => {
-    syncFleet(instances, pendingStarts);
+    void syncFleetSafe(instances, pendingStarts);
   }, WATCHDOG_INTERVAL_MS);
 }
 
 runFleet().catch((err) => {
-  logger.error('Fleet Manager fatal:', { err: err instanceof Error ? err.message : String(err) });
+  logger.error('Fleet Manager fatal:', { err });
   process.exit(1);
 });
