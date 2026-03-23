@@ -29,6 +29,7 @@
     "@supabase/supabase-js": "^2.47",
     "axios": "^1.7",
     "dotenv": "^16.4",
+    "got-scraping": "^4.2.1",
     "https-proxy-agent": "^7.0.6",
     "playwright-core": "^1.49",
     "playwright-extra": "^4.3.6",

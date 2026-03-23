@@ -1,10 +1,8 @@
 /**
- * Raw HTTP client for Blacklane API. Uses keepAlive agent for low latency in sniper loop.
+ * Raw HTTP client for Blacklane API.
  */
 
-import https from 'node:https';
-import axios, { type AxiosInstance, type AxiosError } from 'axios';
-import { HttpsProxyAgent } from 'https-proxy-agent';
+import { gotScraping, type GotScraping } from 'got-scraping';
 import type { AuthCookie } from '../core/auth';
 import { getOfferPrice } from '../core/filter-engine';
 import { logger } from '../utils';
@@ -99,57 +97,18 @@ function getProxySessionLabelFromProxyUrl(proxyUrl: string): string | undefined 
   }
 }
 
-function createDirectAgent(): https.Agent {
-  return new https.Agent({
-    keepAlive: true,
-    scheduling: 'fifo',
-  });
-}
-
-function createProxyAgent(proxyUrl: string): https.Agent | undefined {
-  try {
-    const proxyAgent = new HttpsProxyAgent(proxyUrl);
-    return proxyAgent as unknown as https.Agent;
-  } catch (error) {
-    logger.warn('Failed to create HTTPS proxy agent, falling back to direct HTTPS agent.', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
-  }
-}
-
 /**
  * Exact headers from a successful manual request (Chrome / partner portal).
  * Authorization and Cookie are set dynamically in setSession().
  */
-function buildDefaultHeaders(userAgent: string): Record<string, string> {
+function buildDefaultHeaders(): Record<string, string> {
   return {
     Accept: 'application/vnd.api+json',
     'Content-Type': 'application/json',
-    'User-Agent': userAgent,
     Origin: PARTNER_ORIGIN,
     Referer: `${PARTNER_ORIGIN}/`,
-    'sec-ch-ua': '"Chromium";v="145", "Not:A-Brand";v="99"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
-    'sec-fetch-dest': 'empty',
-    'sec-fetch-mode': 'cors',
-    'sec-fetch-site': 'same-site',
     'x-requested-with': 'XMLHttpRequest',
   };
-}
-
-function createAxiosInstance(
-  baseURL: string,
-  agent: https.Agent,
-  defaultHeaders: Record<string, string>
-): AxiosInstance {
-  return axios.create({
-    baseURL,
-    timeout: REQUEST_TIMEOUT_MS,
-    httpsAgent: agent,
-    headers: defaultHeaders,
-  });
 }
 
 
@@ -348,63 +307,58 @@ function mapPlannedRidesResponse(data: unknown): PlannedRide[] {
 }
 
 /**
- * HTTP client for Blacklane API. Reuses TCP connections (keepAlive) for sniper loop performance.
+ * HTTP client for Blacklane API.
  * Headers match successful manual request; Authorization is set dynamically in setSession().
  */
 export class BlacklaneApi {
-  private agent: https.Agent;
-  private readonly client: AxiosInstance;
-  private userAgent: string;
+  private client: GotScraping;
   /** Blacklane internal user id used for authenticated actions on partner portal. */
   private readonly blacklaneUserId: string;
   private readonly label: string;
   private baseProxyUrl: string;
   private currentProxyUrl: string;
+  private accessToken: string;
+  private cookies: AuthCookie[];
 
   constructor(
     label: string,
     accessToken: string,
     cookies: AuthCookie[],
-    userAgent: string,
+    _userAgent: string,
     blacklaneUserId: string
   ) {
     if (!BASE_URL) {
       throw new Error('BLACKLANE_API_URL must be set');
     }
     this.label = label;
-    this.userAgent = userAgent;
     this.blacklaneUserId = blacklaneUserId;
+    this.accessToken = accessToken;
+    this.cookies = cookies;
     this.baseProxyUrl = process.env.PROXY_URL?.trim() || '';
     this.currentProxyUrl = this.baseProxyUrl ? getDynamicProxyUrl(this.baseProxyUrl) : '';
-    const proxyAgent = this.currentProxyUrl ? createProxyAgent(this.currentProxyUrl) : undefined;
-    this.agent = proxyAgent ?? createDirectAgent();
-    const defaultHeaders = buildDefaultHeaders(userAgent);
-    this.client = createAxiosInstance(BASE_URL, this.agent, defaultHeaders);
+    this.client = this.createGotClient();
     this.setSession(accessToken, cookies);
-    this.client.interceptors.response.use(
-      (res) => res,
-      (err) => {
-        const status = err.response?.status;
-        if (status === 401) {
-          return Promise.reject(new TokenExpiredError());
-        }
-        if (status === 429) {
-          const retryAfter = err.response?.headers?.['retry-after'];
-          return Promise.reject(
-            new RateLimitError(undefined, retryAfter != null ? Number(retryAfter) : undefined)
-          );
-        }
-        if (status === 502 || status === 503) {
-          this.rotateProxySession('gateway');
-        } else {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (msg.includes('ERR_TUNNEL_CONNECTION_FAILED') || msg.includes('ERR_PROXY_CONNECTION_FAILED')) {
-            this.rotateProxySession('tunnel');
-          }
-        }
-        return Promise.reject(err);
-      }
-    );
+  }
+
+  private createGotClient(): GotScraping {
+    return gotScraping.extend({
+      prefixUrl: BASE_URL,
+      timeout: { request: REQUEST_TIMEOUT_MS },
+      responseType: 'json',
+      throwHttpErrors: true,
+      retry: { limit: 0 },
+      proxyUrl: this.currentProxyUrl || undefined,
+      headerGeneratorOptions: {
+        browsers: [{ name: 'chrome', minVersion: 120 }],
+        os: ['windows'],
+        devices: ['desktop'],
+      },
+      headers: {
+        ...buildDefaultHeaders(),
+        Authorization: `Bearer ${this.accessToken}`,
+        Cookie: buildCookieHeader(this.cookies),
+      },
+    });
   }
 
   /**
@@ -415,20 +369,8 @@ export class BlacklaneApi {
     if (!this.baseProxyUrl) return;
     const nextProxyUrl = getDynamicProxyUrl(this.baseProxyUrl);
     const sessionLabel = getProxySessionLabelFromProxyUrl(nextProxyUrl);
-    const nextAgent = createProxyAgent(nextProxyUrl);
-    if (!nextAgent) return;
-
-    // Best-effort: ensure we don't keep reusing pooled sockets from the previous agent.
-    // HttpsProxyAgent extends http.Agent and supports destroy().
-    try {
-      (this.agent as unknown as { destroy?: () => void }).destroy?.();
-    } catch {
-      // ignore
-    }
-
     this.currentProxyUrl = nextProxyUrl;
-    this.agent = nextAgent;
-    this.client.defaults.httpsAgent = this.agent;
+    this.client = this.createGotClient();
 
     if (sessionLabel) {
       logger.warn(
@@ -440,19 +382,18 @@ export class BlacklaneApi {
   }
 
   setSession(accessToken: string, cookies: AuthCookie[]): void {
-    this.client.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
-    this.client.defaults.headers.common['Cookie'] = buildCookieHeader(cookies);
+    this.accessToken = accessToken;
+    this.cookies = cookies;
+    this.client = this.createGotClient();
   }
 
   private shouldRetryWithProxyRotation(error: unknown): boolean {
-    const err = error as AxiosError | Error | undefined;
-    const status = (err as AxiosError | undefined)?.response?.status;
+    const status = this.getHttpStatus(error);
     if (status === 401 || status === 429) return false;
 
-    const code =
-      typeof (err as AxiosError | undefined)?.code === 'string'
-        ? ((err as AxiosError).code as string)
-        : '';
+    const err = error as Error | undefined;
+    const maybeCode = (error as { code?: unknown } | undefined)?.code;
+    const code = typeof maybeCode === 'string' ? maybeCode : '';
     const message = err instanceof Error ? err.message : String(err ?? '');
     const normalized = `${code} ${message}`.toUpperCase();
 
@@ -468,19 +409,78 @@ export class BlacklaneApi {
     );
   }
 
+  private getHttpStatus(error: unknown): number | undefined {
+    if (typeof error !== 'object' || error == null) return undefined;
+    const maybeResponse = (error as { response?: { statusCode?: unknown; status?: unknown } }).response;
+    if (typeof maybeResponse?.statusCode === 'number') return maybeResponse.statusCode;
+    if (typeof maybeResponse?.status === 'number') return maybeResponse.status;
+    return undefined;
+  }
+
+  private getHeaderValue(error: unknown, headerName: string): string | undefined {
+    if (typeof error !== 'object' || error == null) return undefined;
+    const response = (error as { response?: { headers?: Record<string, unknown> } }).response;
+    const headers = response?.headers;
+    if (!headers || typeof headers !== 'object') return undefined;
+    const normalizedKey = headerName.toLowerCase();
+    const matchedKey = Object.keys(headers).find((k) => k.toLowerCase() === normalizedKey);
+    const value = matchedKey ? headers[matchedKey] : undefined;
+    if (Array.isArray(value)) return value[0] != null ? String(value[0]) : undefined;
+    return value != null ? String(value) : undefined;
+  }
+
+  private parseErrorBody(error: unknown): { code?: string; detail?: string } | undefined {
+    if (typeof error !== 'object' || error == null) return undefined;
+    const responseBody = (error as { response?: { body?: unknown } }).response?.body;
+    if (responseBody == null) return undefined;
+    if (typeof responseBody === 'string') {
+      try {
+        return JSON.parse(responseBody) as { code?: string; detail?: string };
+      } catch {
+        return undefined;
+      }
+    }
+    if (typeof responseBody === 'object') {
+      return responseBody as { code?: string; detail?: string };
+    }
+    return undefined;
+  }
+
+  private normalizeRequestError(error: unknown): Error {
+    const status = this.getHttpStatus(error);
+    if (status === 401) {
+      return new TokenExpiredError();
+    }
+    if (status === 429) {
+      const retryAfterRaw = this.getHeaderValue(error, 'retry-after');
+      const retryAfter = retryAfterRaw != null ? Number(retryAfterRaw) : undefined;
+      return new RateLimitError(undefined, Number.isFinite(retryAfter) ? retryAfter : undefined);
+    }
+    if (status === 502 || status === 503) {
+      this.rotateProxySession('gateway');
+    } else {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('ERR_TUNNEL_CONNECTION_FAILED') || msg.includes('ERR_PROXY_CONNECTION_FAILED')) {
+        this.rotateProxySession('tunnel');
+      }
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
   /** GET /hades/offers with page and include params. Returns the response data. */
   async getOffers(): Promise<unknown> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= OFFERS_PROXY_RETRY_ATTEMPTS; attempt += 1) {
       try {
-        const { data } = await this.client.get<unknown>('/hades/offers', { params: OFFERS_PARAMS });
-        return data;
+        const response = await this.client.get<unknown>('hades/offers', { searchParams: OFFERS_PARAMS });
+        return response.body;
       } catch (error) {
-        lastError = error;
+        const normalizedError = this.normalizeRequestError(error);
+        lastError = normalizedError;
         const shouldRetry =
-          this.shouldRetryWithProxyRotation(error) && attempt < OFFERS_PROXY_RETRY_ATTEMPTS;
+          this.shouldRetryWithProxyRotation(normalizedError) && attempt < OFFERS_PROXY_RETRY_ATTEMPTS;
         if (!shouldRetry) {
-          throw error;
+          throw normalizedError;
         }
         this.rotateProxySession('tunnel');
         logger.warn(
@@ -495,10 +495,19 @@ export class BlacklaneApi {
    * GET /hades/bookings (scope=future). Returns upcoming booked rides for "My Rides" / Schedule.
    */
   async getUpcomingBookings(): Promise<UpcomingBooking[]> {
-    const { data } = await this.client.get<unknown>('/hades/bookings', {
-      params: UPCOMING_BOOKINGS_PARAMS,
-    });
-    return mapBookingsResponse(data);
+    try {
+      const response = await this.client.get<unknown>('hades/bookings', {
+        searchParams: UPCOMING_BOOKINGS_PARAMS,
+      });
+      return mapBookingsResponse(response.body);
+    } catch (error) {
+      throw this.normalizeRequestError(error);
+    }
+  }
+
+  private getPathOrUrl(url: string): string {
+    if (/^https?:\/\//i.test(url)) return url;
+    return url.startsWith('/') ? url.slice(1) : url;
   }
 
   /**
@@ -511,16 +520,22 @@ export class BlacklaneApi {
     let pageCount = 0;
 
     do {
-      const response = await this.client.get<unknown>(
-        nextUrl ?? '/hades/rides',
-        nextUrl ? {} : { params: PLANNED_RIDES_PARAMS }
-      );
-      const body = response.data as Record<string, unknown> | undefined;
-      const pageRides = mapPlannedRidesResponse(body);
+      let body: unknown;
+      try {
+        const response = await this.client.get<unknown>(this.getPathOrUrl(nextUrl ?? 'hades/rides'), {
+          ...(nextUrl ? {} : { searchParams: PLANNED_RIDES_PARAMS }),
+        });
+        body = response.body;
+      } catch (error) {
+        throw this.normalizeRequestError(error);
+      }
+
+      const bodyRecord = body as Record<string, unknown> | undefined;
+      const pageRides = mapPlannedRidesResponse(bodyRecord);
       allRides.push(...pageRides);
 
       pageCount += 1;
-      const links = body?.links as { next?: string | null } | undefined;
+      const links = bodyRecord?.links as { next?: string | null } | undefined;
       nextUrl = links?.next ?? null;
       if (nextUrl == null || nextUrl === '' || pageCount >= MAX_PLANNED_RIDES_PAGES) {
         break;
@@ -567,25 +582,22 @@ export class BlacklaneApi {
     }
 
     try {
-      const { data } = await this.client.post<unknown>(url, payload, { headers });
+      const response = await this.client.post<unknown>(url, { json: payload, headers });
       logger.info(
         `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${url} succeeded.`
       );
-      return data as { status: string; offer_id?: string } | Record<string, unknown>;
+      return response.body as { status: string; offer_id?: string } | Record<string, unknown>;
     } catch (error) {
-      const err = error as AxiosError<any>;
-      const status = err.response?.status;
-      const code = (err.response?.data as { code?: string } | undefined)?.code;
+      const status = this.getHttpStatus(error);
+      const parsedBody = this.parseErrorBody(error);
+      const code = parsedBody?.code;
       if (status === 410 && code === 'invalid_state') {
         logger.info(
           `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
         );
-        throw new InvalidOfferStateError(
-          (err.response?.data as { detail?: string } | undefined)?.detail ??
-            'Offer state is not valid (410)'
-        );
+        throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
       }
-      throw error;
+      throw this.normalizeRequestError(error);
     }
   }
 }
