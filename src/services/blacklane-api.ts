@@ -13,6 +13,8 @@ import crypto from 'node:crypto';
 const BASE_URL = process.env.BLACKLANE_API_URL ?? '';
 /** Request timeout in ms; default 15s to avoid ECONNABORTED when API or network is slow. */
 const REQUEST_TIMEOUT_MS = Number(process.env.BLACKLANE_REQUEST_TIMEOUT_MS) || 15_000;
+/** Retries for transient proxy/network failures while fetching offers. */
+const OFFERS_PROXY_RETRY_ATTEMPTS = 3;
 
 /** Origin/Referer for athena requests (same-site from partner portal). */
 const PARTNER_ORIGIN = 'https://partner.blacklane.com';
@@ -442,10 +444,51 @@ export class BlacklaneApi {
     this.client.defaults.headers.common['Cookie'] = buildCookieHeader(cookies);
   }
 
+  private shouldRetryWithProxyRotation(error: unknown): boolean {
+    const err = error as AxiosError | Error | undefined;
+    const status = (err as AxiosError | undefined)?.response?.status;
+    if (status === 401 || status === 429) return false;
+
+    const code =
+      typeof (err as AxiosError | undefined)?.code === 'string'
+        ? ((err as AxiosError).code as string)
+        : '';
+    const message = err instanceof Error ? err.message : String(err ?? '');
+    const normalized = `${code} ${message}`.toUpperCase();
+
+    return (
+      normalized.includes('ECONNRESET') ||
+      normalized.includes('ECONNABORTED') ||
+      normalized.includes('ETIMEDOUT') ||
+      normalized.includes('EPIPE') ||
+      normalized.includes('SOCKET HANG UP') ||
+      normalized.includes('CLIENT NETWORK SOCKET DISCONNECTED BEFORE SECURE TLS CONNECTION WAS ESTABLISHED') ||
+      normalized.includes('ERR_TUNNEL_CONNECTION_FAILED') ||
+      normalized.includes('ERR_PROXY_CONNECTION_FAILED')
+    );
+  }
+
   /** GET /hades/offers with page and include params. Returns the response data. */
   async getOffers(): Promise<unknown> {
-    const { data } = await this.client.get<unknown>('/hades/offers', { params: OFFERS_PARAMS });
-    return data;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= OFFERS_PROXY_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        const { data } = await this.client.get<unknown>('/hades/offers', { params: OFFERS_PARAMS });
+        return data;
+      } catch (error) {
+        lastError = error;
+        const shouldRetry =
+          this.shouldRetryWithProxyRotation(error) && attempt < OFFERS_PROXY_RETRY_ATTEMPTS;
+        if (!shouldRetry) {
+          throw error;
+        }
+        this.rotateProxySession('tunnel');
+        logger.warn(
+          `[NETWORK] getOffers transient network/proxy failure for ${this.label}; retrying with a rotated proxy (${attempt + 1}/${OFFERS_PROXY_RETRY_ATTEMPTS}).`
+        );
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   /**
