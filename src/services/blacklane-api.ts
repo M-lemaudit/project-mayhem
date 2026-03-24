@@ -2,7 +2,7 @@
  * Raw HTTP client for Blacklane API.
  */
 
-import { gotScraping, type GotScraping } from 'got-scraping';
+import type { GotScraping } from 'got-scraping';
 import type { AuthCookie } from '../core/auth';
 import { getOfferPrice } from '../core/filter-engine';
 import { logger } from '../utils';
@@ -311,7 +311,7 @@ function mapPlannedRidesResponse(data: unknown): PlannedRide[] {
  * Headers match successful manual request; Authorization is set dynamically in setSession().
  */
 export class BlacklaneApi {
-  private client: GotScraping;
+  private client: GotScraping | null = null;
   /** Blacklane internal user id used for authenticated actions on partner portal. */
   private readonly blacklaneUserId: string;
   private readonly label: string;
@@ -336,11 +336,9 @@ export class BlacklaneApi {
     this.cookies = cookies;
     this.baseProxyUrl = process.env.PROXY_URL?.trim() || '';
     this.currentProxyUrl = this.baseProxyUrl ? getDynamicProxyUrl(this.baseProxyUrl) : '';
-    this.client = this.createGotClient();
-    this.setSession(accessToken, cookies);
   }
 
-  private createGotClient(): GotScraping {
+  private createGotClient(gotScraping: { extend: (options: Record<string, unknown>) => GotScraping }): GotScraping {
     return gotScraping.extend({
       prefixUrl: BASE_URL,
       timeout: { request: REQUEST_TIMEOUT_MS },
@@ -361,6 +359,13 @@ export class BlacklaneApi {
     });
   }
 
+  private async getClient(): Promise<GotScraping> {
+    if (this.client) return this.client;
+    const { gotScraping } = await import('got-scraping');
+    this.client = this.createGotClient(gotScraping as { extend: (options: Record<string, unknown>) => GotScraping });
+    return this.client;
+  }
+
   /**
    * Rotate proxy session locally (in-memory) for this API instance.
    * Never mutates process.env.PROXY_URL (safe for concurrent bots).
@@ -370,7 +375,7 @@ export class BlacklaneApi {
     const nextProxyUrl = getDynamicProxyUrl(this.baseProxyUrl);
     const sessionLabel = getProxySessionLabelFromProxyUrl(nextProxyUrl);
     this.currentProxyUrl = nextProxyUrl;
-    this.client = this.createGotClient();
+    this.client = null;
 
     if (sessionLabel) {
       logger.warn(
@@ -384,7 +389,7 @@ export class BlacklaneApi {
   setSession(accessToken: string, cookies: AuthCookie[]): void {
     this.accessToken = accessToken;
     this.cookies = cookies;
-    this.client = this.createGotClient();
+    this.client = null;
   }
 
   private shouldRetryWithProxyRotation(error: unknown): boolean {
@@ -472,7 +477,12 @@ export class BlacklaneApi {
     let lastError: unknown;
     for (let attempt = 1; attempt <= OFFERS_PROXY_RETRY_ATTEMPTS; attempt += 1) {
       try {
-        const response = await this.client.get<unknown>('hades/offers', { searchParams: OFFERS_PARAMS });
+        const { gotScraping } = await import('got-scraping');
+        const client =
+          this.client ??
+          this.createGotClient(gotScraping as { extend: (options: Record<string, unknown>) => GotScraping });
+        this.client = client;
+        const response = await client.get<unknown>('hades/offers', { searchParams: OFFERS_PARAMS });
         return response.body;
       } catch (error) {
         const normalizedError = this.normalizeRequestError(error);
@@ -496,7 +506,8 @@ export class BlacklaneApi {
    */
   async getUpcomingBookings(): Promise<UpcomingBooking[]> {
     try {
-      const response = await this.client.get<unknown>('hades/bookings', {
+      const client = await this.getClient();
+      const response = await client.get<unknown>('hades/bookings', {
         searchParams: UPCOMING_BOOKINGS_PARAMS,
       });
       return mapBookingsResponse(response.body);
@@ -522,7 +533,8 @@ export class BlacklaneApi {
     do {
       let body: unknown;
       try {
-        const response = await this.client.get<unknown>(this.getPathOrUrl(nextUrl ?? 'hades/rides'), {
+        const client = await this.getClient();
+        const response = await client.get<unknown>(this.getPathOrUrl(nextUrl ?? 'hades/rides'), {
           ...(nextUrl ? {} : { searchParams: PLANNED_RIDES_PARAMS }),
         });
         body = response.body;
@@ -582,7 +594,8 @@ export class BlacklaneApi {
     }
 
     try {
-      const response = await this.client.post<unknown>(url, { json: payload, headers });
+      const client = await this.getClient();
+      const response = await client.post<unknown>(url, { json: payload, headers });
       logger.info(
         `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${url} succeeded.`
       );
