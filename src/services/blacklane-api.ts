@@ -2,11 +2,19 @@
  * Raw HTTP client for Blacklane API.
  */
 
-import type { GotScraping } from 'got-scraping';
 import type { AuthCookie } from '../core/auth';
 import { getOfferPrice } from '../core/filter-engine';
 import { logger } from '../utils';
 import crypto from 'node:crypto';
+
+type ScrapingClient = {
+  get<T>(url: string, options?: Record<string, unknown>): Promise<{ body: T }>;
+  post<T>(url: string, options?: Record<string, unknown>): Promise<{ body: T }>;
+};
+
+type GotScrapingFactory = {
+  extend(options: Record<string, unknown>): ScrapingClient;
+};
 
 const BASE_URL = process.env.BLACKLANE_API_URL ?? '';
 /** Request timeout in ms; default 15s to avoid ECONNABORTED when API or network is slow. */
@@ -311,7 +319,7 @@ function mapPlannedRidesResponse(data: unknown): PlannedRide[] {
  * Headers match successful manual request; Authorization is set dynamically in setSession().
  */
 export class BlacklaneApi {
-  private client: GotScraping | null = null;
+  private client: ScrapingClient | null = null;
   /** Blacklane internal user id used for authenticated actions on partner portal. */
   private readonly blacklaneUserId: string;
   private readonly label: string;
@@ -338,7 +346,7 @@ export class BlacklaneApi {
     this.currentProxyUrl = this.baseProxyUrl ? getDynamicProxyUrl(this.baseProxyUrl) : '';
   }
 
-  private createGotClient(gotScraping: { extend: (options: Record<string, unknown>) => GotScraping }): GotScraping {
+  private createGotClient(gotScraping: GotScrapingFactory): ScrapingClient {
     return gotScraping.extend({
       prefixUrl: BASE_URL,
       timeout: { request: REQUEST_TIMEOUT_MS },
@@ -359,10 +367,10 @@ export class BlacklaneApi {
     });
   }
 
-  private async getClient(): Promise<GotScraping> {
+  private async getClient(): Promise<ScrapingClient> {
     if (this.client) return this.client;
     const { gotScraping } = await import('got-scraping');
-    this.client = this.createGotClient(gotScraping as { extend: (options: Record<string, unknown>) => GotScraping });
+    this.client = this.createGotClient(gotScraping as unknown as GotScrapingFactory);
     return this.client;
   }
 
@@ -480,7 +488,7 @@ export class BlacklaneApi {
         const { gotScraping } = await import('got-scraping');
         const client =
           this.client ??
-          this.createGotClient(gotScraping as { extend: (options: Record<string, unknown>) => GotScraping });
+          this.createGotClient(gotScraping as unknown as GotScrapingFactory);
         this.client = client;
         const response = await client.get<unknown>('hades/offers', { searchParams: OFFERS_PARAMS });
         return response.body;
