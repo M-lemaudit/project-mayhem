@@ -83,7 +83,9 @@ async function main(): Promise<void> {
     const count = rows?.length ?? 0;
     console.log(`\n✅ Sync OK. Rides en base pour ce bot: ${count}`);
   } catch (err) {
-    console.error('Erreur:', err instanceof Error ? err.message : err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error && err.stack ? err.stack : undefined;
+    console.error('Erreur:', { errorMessage, errorStack });
     process.exit(1);
   }
 }

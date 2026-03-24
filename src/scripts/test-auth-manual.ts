@@ -37,7 +37,9 @@ async function main(): Promise<void> {
     console.log(SEP);
   } catch (err) {
     console.error(SEP);
-    console.error('FAILED: Full error object:', err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error && err.stack ? err.stack : undefined;
+    console.error('FAILED:', { errorMessage, errorStack });
     console.error(SEP);
     process.exit(1);
   }

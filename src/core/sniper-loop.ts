@@ -8,7 +8,7 @@ import { InvalidOfferStateError, RateLimitError, TokenExpiredError } from '../se
 import { getGlobalSettings } from '../config/global-settings';
 import { FilterEngine, getOfferPrice, resolveOfferLocations, type BotFilters, type ExistingRide, type IncludedResource, type OfferShape } from './filter-engine';
 import { getSupabase } from '../config/supabase';
-import { logger } from '../utils';
+import { isLikelyDatabaseDown, logger, toErrorDetails } from '../utils';
 
 const HEARTBEAT_INTERVAL_CYCLES = 5;
 const RATE_LIMIT_BACKOFF_SECONDS = 300; // 5 minutes
@@ -23,6 +23,7 @@ const PROCESSED_OFFER_IDS_MAX = 500;
 const MATCH_COOLDOWN_MIN_MS = 5 * 1000; // 5 seconds
 const MATCH_COOLDOWN_MAX_MS = 10 * 1000; // 10 seconds
 const MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH = 2;
+const STANDBY_POLL_MS = 30_000;
 
 function getTodayIsoDateInTimezone(timezoneId?: string): string {
   const tz = timezoneId?.trim();
@@ -281,6 +282,7 @@ export class SniperLoop {
   private consecutiveUnknownErrors = 0;
   /** Last local (bot timezone) date when blackoutDates pruning ran. */
   private lastBlackoutPruneIsoDate: string | null = null;
+  private isStandby = false;
 
   constructor(
     private readonly api: BlacklaneApi,
@@ -298,6 +300,10 @@ export class SniperLoop {
 
   stop(): void {
     this.isRunning = false;
+  }
+
+  setStandby(on: boolean): void {
+    this.isStandby = on;
   }
 
   async start(): Promise<void> {
@@ -333,10 +339,23 @@ export class SniperLoop {
     try {
       while (this.isRunning) {
         try {
+          if (this.isStandby) {
+            await sleep(STANDBY_POLL_MS);
+            continue;
+          }
           cycleCount += 1;
 
           if (this.botState) {
-            const status = await this.botState.getStatus();
+            const status = await this.botState.getStatus().catch((err) => {
+              if (isLikelyDatabaseDown(err)) {
+                this.isStandby = true;
+                logger.warn(`${this.logPrefix} Database seems down while reading status; entering standby mode`, {
+                  ...toErrorDetails(err),
+                });
+                return 'RUNNING';
+              }
+              throw err;
+            });
             if (status === 'STOPPED') {
               console.log(`${this.logPrefix} Stop received from dashboard → stopping loop.`);
               this.isRunning = false;
@@ -346,7 +365,16 @@ export class SniperLoop {
 
           let filters: BotFilters = this.filters;
           if (this.botState) {
-            const raw = await this.botState.getFilters();
+            const raw = await this.botState.getFilters().catch((err) => {
+              if (isLikelyDatabaseDown(err)) {
+                this.isStandby = true;
+                logger.warn(`${this.logPrefix} Database seems down while reading filters; entering standby mode`, {
+                  ...toErrorDetails(err),
+                });
+                return this.filters as unknown as Record<string, unknown>;
+              }
+              throw err;
+            });
 
             // Daily housekeeping: prune past blackout dates from DB (by bot timezone)
             if (this.botId) {
@@ -381,7 +409,7 @@ export class SniperLoop {
                   }
                 } catch (err) {
                   logger.warn('Failed to prune blackoutDates in DB', {
-                    error: err instanceof Error ? err.message : String(err),
+                    ...toErrorDetails(err),
                   });
                 }
               }
@@ -463,7 +491,9 @@ export class SniperLoop {
                 if (this.botState) {
                   await this.botState
                     .reportMatch(idStr, price as string | number, pickupAt)
-                    .catch(() => {});
+                    .catch((err) => {
+                      logger.warn(`${this.logPrefix} Failed to report match`, { ...toErrorDetails(err) });
+                    });
                 }
                 await this.api.acceptOffer(offer);
                 if (this.botId) {
@@ -486,7 +516,7 @@ export class SniperLoop {
                       );
                   } catch (err) {
                     logger.warn('Failed to log accepted offer to Supabase', {
-                      error: err instanceof Error ? err.message : String(err),
+                      ...toErrorDetails(err),
                     });
                   }
                 }
@@ -510,7 +540,16 @@ export class SniperLoop {
           console.log(`${this.logPrefix} Cycle ${cycleCount}: ${offers.length} offer(s).`);
 
           if (this.botState && cycleCount % HEARTBEAT_INTERVAL_CYCLES === 0) {
-            await this.botState.updateHeartbeat();
+            await this.botState.updateHeartbeat().catch((err) => {
+              if (isLikelyDatabaseDown(err)) {
+                this.isStandby = true;
+                logger.warn(`${this.logPrefix} Database seems down during heartbeat; entering standby mode`, {
+                  ...toErrorDetails(err),
+                });
+                return;
+              }
+              throw err;
+            });
           }
           this.consecutiveUnknownErrors = 0;
 
@@ -523,12 +562,12 @@ export class SniperLoop {
             if (this.botState) {
               await this.botState.saveSession({}).catch((saveErr) => {
                 logger.warn(`${this.logPrefix} Failed to clear session after token expiry`, {
-                  err: saveErr,
+                  ...toErrorDetails(saveErr),
                 });
               });
               await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
                 logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH after token expiry`, {
-                  err: statusErr,
+                  ...toErrorDetails(statusErr),
                 });
               });
             }
@@ -545,7 +584,9 @@ export class SniperLoop {
             );
             if (this.botState) {
               await this.botState.updateStatus('PAUSED_RATE_LIMIT').catch((statusErr) => {
-                logger.warn(`${this.logPrefix} Failed to set PAUSED_RATE_LIMIT`, { err: statusErr });
+                logger.warn(`${this.logPrefix} Failed to set PAUSED_RATE_LIMIT`, {
+                  ...toErrorDetails(statusErr),
+                });
               });
             }
 
@@ -555,7 +596,16 @@ export class SniperLoop {
               if (sleepMs > 0) await sleep(sleepMs);
 
               if (this.botState) {
-                const status = await this.botState.getStatus();
+                const status = await this.botState.getStatus().catch((statusErr) => {
+                  if (isLikelyDatabaseDown(statusErr)) {
+                    this.isStandby = true;
+                    logger.warn(`${this.logPrefix} Database seems down during rate-limit pause; entering standby mode`, {
+                      ...toErrorDetails(statusErr),
+                    });
+                    return 'RUNNING';
+                  }
+                  throw statusErr;
+                });
                 if (status === 'STOPPED') {
                   console.log(`${this.logPrefix} Stop received from dashboard → stopping loop.`);
                   this.isRunning = false;
@@ -570,7 +620,7 @@ export class SniperLoop {
             if (status !== 'STOPPED' && this.botState) {
               await this.botState.updateStatus('RUNNING').catch((statusErr) => {
                 logger.warn(`${this.logPrefix} Failed to restore RUNNING after rate limit pause`, {
-                  err: statusErr,
+                  ...toErrorDetails(statusErr),
                 });
               });
             }
@@ -598,7 +648,7 @@ export class SniperLoop {
               this.consecutiveGatewayErrors += 1;
               console.error(
                 `${this.logPrefix} Gateway error (${statusCode}) in sniper cycle. Count=${this.consecutiveGatewayErrors}.`,
-                err
+                toErrorDetails(err)
               );
               // Auto-heal: rotate proxy session so next cycle uses a fresh IP.
               this.api.rotateProxySession('gateway');
@@ -616,11 +666,11 @@ export class SniperLoop {
               this.consecutiveUnknownErrors += 1;
               console.error(
                 `${this.logPrefix} Erreur cycle (${this.consecutiveUnknownErrors}/${MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH}):`,
-                err
+                toErrorDetails(err)
               );
               logger.error(`${this.logPrefix} Unhandled sniper cycle error`, {
                 consecutiveUnknownErrors: this.consecutiveUnknownErrors,
-                err,
+                ...toErrorDetails(err),
               });
               if (this.consecutiveUnknownErrors < MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH) {
                 logger.warn(
@@ -631,9 +681,16 @@ export class SniperLoop {
               if (this.botState) {
                 await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
                   logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH after repeated unknown errors`, {
-                    err: statusErr,
+                    ...toErrorDetails(statusErr),
                   });
                 });
+              }
+              if (isLikelyDatabaseDown(err)) {
+                this.isStandby = true;
+                logger.warn(`${this.logPrefix} Database down detected in unknown error path; staying alive in standby`, {
+                  ...toErrorDetails(err),
+                });
+                continue;
               }
               throw err;
             }
@@ -641,10 +698,20 @@ export class SniperLoop {
         }
       }
     } catch (err) {
+      if (isLikelyDatabaseDown(err)) {
+        this.isStandby = true;
+        logger.warn(`${this.logPrefix} Top-level DB error captured; keeping sniper alive in standby`, {
+          ...toErrorDetails(err),
+        });
+        while (this.isRunning && this.isStandby) {
+          await sleep(STANDBY_POLL_MS);
+        }
+        return;
+      }
       if (this.botState) {
         await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
           logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH in top-level sniper catch`, {
-            err: statusErr,
+            ...toErrorDetails(statusErr),
           });
         });
       }

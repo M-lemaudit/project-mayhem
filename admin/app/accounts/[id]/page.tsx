@@ -83,7 +83,10 @@ export default function AccountPage({ params }: AccountPageProps) {
         .single();
 
       if (error || !data) {
-        console.error('Failed to fetch bot', error);
+        console.error('Failed to fetch bot', {
+          errorMessage: error?.message ?? 'Unknown error',
+          errorStack: error && 'stack' in error && typeof error.stack === 'string' ? error.stack : undefined,
+        });
         router.push('/dashboard');
         return;
       }
@@ -227,7 +230,10 @@ export default function AccountPage({ params }: AccountPageProps) {
       .eq('id', id);
 
     if (error) {
-      console.error('Failed to save filters:', error.message);
+      console.error('Failed to save filters', {
+        errorMessage: error.message,
+        errorStack: 'stack' in error && typeof error.stack === 'string' ? error.stack : undefined,
+      });
     } else {
       setIsDirty(false);
       setShowSuccess(true);

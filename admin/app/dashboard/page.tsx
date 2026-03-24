@@ -83,7 +83,10 @@ export default function DashboardPage() {
       .select('*')
       .order('created_at', { ascending: false });
     if (error) {
-      console.error('Failed to fetch bots', error);
+      console.error('Failed to fetch bots', {
+        errorMessage: error.message,
+        errorStack: 'stack' in error && typeof error.stack === 'string' ? error.stack : undefined,
+      });
       return;
     }
     setBots((data as BotRow[]) ?? []);
@@ -155,7 +158,10 @@ export default function DashboardPage() {
       }
     } catch (err) {
       alert('An error occurred');
-      console.error(err);
+      console.error('Dashboard action failed', {
+        errorMessage: err instanceof Error ? err.message : String(err),
+        errorStack: err instanceof Error ? err.stack : undefined,
+      });
     } finally {
       setIsAdding(false);
     }

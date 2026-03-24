@@ -150,7 +150,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('FAILED:', err);
+  const errorMessage = err instanceof Error ? err.message : String(err);
+  const errorStack = err instanceof Error && err.stack ? err.stack : undefined;
+  console.error('FAILED:', { errorMessage, errorStack });
   process.exit(1);
 });
 

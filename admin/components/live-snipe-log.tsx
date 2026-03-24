@@ -67,7 +67,10 @@ export function LiveSnipeLog({ mode, botId, botsById }: LiveSnipeLogProps) {
       const { data, error } = await query;
       if (!isMounted) return;
       if (error) {
-        console.error('Failed to fetch accepted_offers for LiveSnipeLog:', error.message);
+        console.error('Failed to fetch accepted_offers for LiveSnipeLog', {
+          errorMessage: error.message,
+          errorStack: 'stack' in error && typeof error.stack === 'string' ? error.stack : undefined,
+        });
         setLogs([]);
       } else {
         setLogs((data as AcceptedOfferRow[]) ?? []);

@@ -45,7 +45,9 @@ async function main(): Promise<void> {
       console.log('  ---');
     }
   } catch (err) {
-    console.error('Erreur:', err instanceof Error ? err.message : err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error && err.stack ? err.stack : undefined;
+    console.error('Erreur:', { errorMessage, errorStack });
     process.exit(1);
   }
 }

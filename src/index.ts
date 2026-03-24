@@ -8,7 +8,7 @@ import 'dotenv/config';
 import { AuthError, loginAndGetToken, discoverBlacklaneUserId } from './core/auth';
 import { ReauthRequiredError, SniperLoop, type BotFilters } from './core';
 import { BlacklaneApi, BotStateService, RideSyncService } from './services';
-import { logger, triggerAuthErrorWebhook } from './utils';
+import { isLikelyDatabaseDown, logger, toErrorDetails, triggerAuthErrorWebhook } from './utils';
 import { getSupabase } from './config/supabase';
 import { decrypt, looksEncrypted } from './utils/crypto';
 
@@ -20,6 +20,7 @@ if (proxyUrl) {
 const WATCHDOG_INTERVAL_MS = 10_000;
 const RIDE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_IMMEDIATE_FATAL_ERRORS = 2;
+const DB_PING_INTERVAL_MS = 30_000;
 
 export interface RunningBotRow {
   id: string;
@@ -52,6 +53,18 @@ async function fetchActiveBots(): Promise<ActiveBotsResult> {
   return { ok: true, bots: (data ?? []) as RunningBotRow[] };
 }
 
+async function pingSupabaseLight(): Promise<boolean> {
+  try {
+    const { error } = await getSupabase()
+      .from('bots')
+      .select('id', { head: true, count: 'exact' })
+      .limit(1);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 /** Resolves plaintext password (decrypt if encrypted). */
 function resolvePassword(raw: string | null): string {
   if (!raw || typeof raw !== 'string') {
@@ -64,7 +77,9 @@ function resolvePassword(raw: string | null): string {
 async function runBotInstance(
   bot: RunningBotRow,
   instances: Map<string, SniperLoop>,
-  pendingStarts: Set<string>
+  pendingStarts: Set<string>,
+  getIsDatabaseDown: () => boolean,
+  onDatabaseDown: (err: unknown) => void
 ): Promise<void> {
   const { email } = bot;
   const prefix = () => `[${email}]`;
@@ -89,6 +104,11 @@ async function runBotInstance(
   try {
     while (true) {
       try {
+        if (getIsDatabaseDown()) {
+          logger.warn(`${prefix()} Database standby active; waiting before starting/restarting bot instance.`);
+          await new Promise((resolve) => setTimeout(resolve, DB_PING_INTERVAL_MS));
+          continue;
+        }
         logger.info(`${prefix()} Connecting to Blacklane...`);
         const savedSession = await botState.getSession();
         const session = await loginAndGetToken(email, password, savedSession, browserOptions);
@@ -146,7 +166,7 @@ async function runBotInstance(
         rideSyncInterval = setInterval(() => {
           rideSync.sync(api).catch((syncError) => {
             logger.warn(`${prefix()} RideSync interval failed`, {
-              err: syncError,
+              ...toErrorDetails(syncError),
             });
           });
         }, RIDE_SYNC_INTERVAL_MS);
@@ -164,13 +184,22 @@ async function runBotInstance(
         rideSyncInterval = undefined;
         instances.delete(email);
 
+        if (isLikelyDatabaseDown(err)) {
+          onDatabaseDown(err);
+          logger.warn(`${prefix()} Database down detected in bot instance; parking in standby`, {
+            ...toErrorDetails(err),
+          });
+          await new Promise((resolve) => setTimeout(resolve, DB_PING_INTERVAL_MS));
+          continue;
+        }
+
         if (err instanceof ReauthRequiredError && reauthAttempts < maxReauthAttempts) {
           reauthAttempts += 1;
           logger.warn(
             `${prefix()} Gateway persisted → attempting Playwright re-auth (Attempt ${reauthAttempts}/${maxReauthAttempts})`
           );
           await botState.saveSession({}).catch((saveErr) => {
-            logger.warn(`${prefix()} Failed to clear session during reauth`, { err: saveErr });
+            logger.warn(`${prefix()} Failed to clear session during reauth`, { ...toErrorDetails(saveErr) });
           });
           continue;
         }
@@ -191,7 +220,7 @@ async function runBotInstance(
           botId: bot.id,
           email,
           consecutiveImmediateFatalErrors,
-          err,
+          ...toErrorDetails(err),
         });
         const shouldMarkErrorNow = consecutiveImmediateFatalErrors >= MAX_IMMEDIATE_FATAL_ERRORS;
 
@@ -203,13 +232,21 @@ async function runBotInstance(
         }
 
         if (err instanceof AuthError && err.code === 'INVALID_CREDENTIALS') {
-          await botState.updateStatus('STOPPED').catch((statusErr) => {
-            logger.warn(`${prefix()} Failed to set STOPPED status`, { err: statusErr });
-          });
+          if (!getIsDatabaseDown()) {
+            await botState.updateStatus('STOPPED').catch((statusErr) => {
+              logger.warn(`${prefix()} Failed to set STOPPED status`, { ...toErrorDetails(statusErr) });
+            });
+          } else {
+            logger.warn(`${prefix()} Skipping STOPPED status update because database is down.`);
+          }
         } else {
-          await botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
-            logger.warn(`${prefix()} Failed to set ERROR_AUTH status`, { err: statusErr });
-          });
+          if (!getIsDatabaseDown()) {
+            await botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
+              logger.warn(`${prefix()} Failed to set ERROR_AUTH status`, { ...toErrorDetails(statusErr) });
+            });
+          } else {
+            logger.warn(`${prefix()} Skipping ERROR_AUTH status update because database is down.`);
+          }
         }
         let reason: Parameters<typeof triggerAuthErrorWebhook>[2] = 'unknown';
         let explanation: string | undefined;
@@ -260,12 +297,21 @@ let prevRunningBotIds = new Set<string>();
 
 async function syncFleet(
   instances: Map<string, SniperLoop>,
-  pendingStarts: Set<string>
+  pendingStarts: Set<string>,
+  getIsDatabaseDown: () => boolean,
+  onDatabaseDown: (err: unknown) => void
 ): Promise<void> {
+  if (getIsDatabaseDown()) {
+    logger.warn('Fleet: database in standby mode; skipping sync tick.');
+    return;
+  }
   const activeResult = await fetchActiveBots();
   if (!activeResult.ok) {
+    if (isLikelyDatabaseDown(activeResult.error)) {
+      throw activeResult.error;
+    }
     logger.error('Fleet: skipping sync tick after Supabase polling failure', {
-      err: activeResult.error,
+      ...toErrorDetails(activeResult.error),
     });
     return;
   }
@@ -285,7 +331,7 @@ async function syncFleet(
     const wasAlreadyRunningLastSync = prevRunningBotIds.has(bot.id);
     if (!alreadyRunning && !wasAlreadyRunningLastSync) {
       logger.info(`[${bot.email}] Starting sniper (status changed to RUNNING).`);
-      runBotInstance(bot, instances, pendingStarts);
+      runBotInstance(bot, instances, pendingStarts, getIsDatabaseDown, onDatabaseDown);
     }
   }
 
@@ -294,18 +340,65 @@ async function syncFleet(
 
 async function syncFleetSafe(
   instances: Map<string, SniperLoop>,
-  pendingStarts: Set<string>
+  pendingStarts: Set<string>,
+  getIsDatabaseDown: () => boolean,
+  enterDatabaseStandby: (err: unknown) => void
 ): Promise<void> {
   try {
-    await syncFleet(instances, pendingStarts);
+    await syncFleet(instances, pendingStarts, getIsDatabaseDown, enterDatabaseStandby);
   } catch (err) {
-    logger.error('Fleet: sync tick crashed', { err });
+    if (isLikelyDatabaseDown(err)) {
+      enterDatabaseStandby(err);
+      return;
+    }
+    logger.error('Fleet: sync tick crashed', { ...toErrorDetails(err) });
   }
 }
 
 async function runFleet(): Promise<void> {
   const instances = new Map<string, SniperLoop>();
   const pendingStarts = new Set<string>();
+  let isDatabaseDown = false;
+  let pingTimer: ReturnType<typeof setInterval> | undefined;
+
+  const setStandbyForAllSnipers = (on: boolean): void => {
+    for (const sniper of instances.values()) {
+      sniper.setStandby(on);
+    }
+  };
+
+  const exitDatabaseStandby = (): void => {
+    isDatabaseDown = false;
+    if (pingTimer != null) {
+      clearInterval(pingTimer);
+      pingTimer = undefined;
+    }
+    logger.info('Fleet: Supabase reachable again, leaving standby mode.');
+    setStandbyForAllSnipers(false);
+    void syncFleetSafe(
+      instances,
+      pendingStarts,
+      () => isDatabaseDown,
+      enterDatabaseStandby
+    );
+  };
+
+  const enterDatabaseStandby = (err: unknown): void => {
+    if (isDatabaseDown) return;
+    isDatabaseDown = true;
+    logger.error('Fleet: Supabase appears down, entering standby mode.', {
+      ...toErrorDetails(err),
+    });
+    setStandbyForAllSnipers(true);
+    if (pingTimer != null) return;
+    pingTimer = setInterval(() => {
+      void pingSupabaseLight().then((ok) => {
+        if (ok) {
+          exitDatabaseStandby();
+        }
+      });
+    }, DB_PING_INTERVAL_MS);
+  };
 
   const shutdown = (): void => {
     logger.info('Fleet: Shutting down, stopping all bots...');
@@ -318,21 +411,21 @@ async function runFleet(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   process.on('unhandledRejection', (reason) => {
-    logger.error('Unhandled promise rejection in fleet process', { err: reason });
+    logger.error('Unhandled promise rejection in fleet process', { ...toErrorDetails(reason) });
   });
   process.on('uncaughtException', (error) => {
-    logger.error('Uncaught exception in fleet process', { err: error });
+    logger.error('Uncaught exception in fleet process', { ...toErrorDetails(error) });
   });
 
   logger.info('Fleet Manager started. Watching for RUNNING bots every 10s.');
-  await syncFleetSafe(instances, pendingStarts);
+  await syncFleetSafe(instances, pendingStarts, () => isDatabaseDown, enterDatabaseStandby);
 
   setInterval(() => {
-    void syncFleetSafe(instances, pendingStarts);
+    void syncFleetSafe(instances, pendingStarts, () => isDatabaseDown, enterDatabaseStandby);
   }, WATCHDOG_INTERVAL_MS);
 }
 
 runFleet().catch((err) => {
-  logger.error('Fleet Manager fatal:', { err });
+  logger.error('Fleet Manager fatal:', { ...toErrorDetails(err) });
   process.exit(1);
 });

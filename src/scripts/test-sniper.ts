@@ -42,7 +42,9 @@ async function main(): Promise<void> {
     const sniper = new SniperLoop(api, filters);
     await sniper.start();
   } catch (err) {
-    console.error('FAILED:', err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error && err.stack ? err.stack : undefined;
+    console.error('FAILED:', { errorMessage, errorStack });
     process.exit(1);
   }
 }
