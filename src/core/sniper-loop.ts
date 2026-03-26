@@ -182,6 +182,37 @@ function randomSleep(minMs: number, maxMs: number): Promise<void> {
   return sleep(ms);
 }
 
+function isSoftNetworkError(err: unknown, statusCode?: number): boolean {
+  if (statusCode === 401 || statusCode === 403) return false;
+
+  const maybeErr = err as { code?: unknown; name?: unknown; message?: unknown } | undefined;
+  const code = typeof maybeErr?.code === 'string' ? maybeErr.code.toUpperCase() : '';
+  const name = typeof maybeErr?.name === 'string' ? maybeErr.name.toLowerCase() : '';
+  const message = typeof maybeErr?.message === 'string' ? maybeErr.message.toLowerCase() : String(err).toLowerCase();
+
+  if (name === 'timeouterror') return true;
+  if (statusCode === 502 || statusCode === 503 || statusCode === 504) return true;
+
+  const networkCodes = new Set([
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'EHOSTUNREACH',
+    'ECONNREFUSED',
+    'EAI_AGAIN',
+    'UND_ERR_CONNECT_TIMEOUT',
+  ]);
+  if (networkCodes.has(code)) return true;
+
+  return (
+    message.includes('err_tunnel_connection_failed') ||
+    message.includes('err_proxy_connection_failed') ||
+    message.includes('socket hang up') ||
+    message.includes('network') ||
+    message.includes('timeout')
+  );
+}
+
 function getOffersList(data: unknown): OfferShape[] {
   if (Array.isArray(data)) return data as OfferShape[];
   if (data && typeof data === 'object') {
@@ -642,6 +673,21 @@ export class SniperLoop {
               typeof maybeStatus === 'number' && Number.isFinite(maybeStatus)
                 ? maybeStatus
                 : undefined;
+
+            if (isSoftNetworkError(err, statusCode)) {
+              this.consecutiveUnknownErrors = 0;
+              this.consecutiveGatewayErrors = 0;
+              logger.warn(
+                `${this.logPrefix} [NETWORK] Lenteur du proxy ou erreur reseau ignoree. Reprise au prochain cycle.`,
+                { ...toErrorDetails(err), statusCode }
+              );
+              this.api.rotateProxySession(
+                statusCode === 502 || statusCode === 503 || statusCode === 504 ? 'gateway' : 'tunnel'
+              );
+              const { sniper_delay_min_ms, sniper_delay_max_ms } = await getGlobalSettings();
+              await randomSleep(sniper_delay_min_ms, sniper_delay_max_ms);
+              continue;
+            }
 
             if (statusCode === 502 || statusCode === 503) {
               this.consecutiveUnknownErrors = 0;
