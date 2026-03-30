@@ -6,6 +6,33 @@ export interface ErrorDetails {
   causeStack?: string;
 }
 
+/**
+ * Extract HTTP status code from different error shapes.
+ * - prefer `err.response.statusCode` / `err.response.status`
+ * - fallback: parse message like "status code 502"
+ */
+export function extractHttpStatusCode(err: unknown): number | undefined {
+  if (typeof err !== 'object' || err == null) return undefined;
+
+  const maybeResponse = (err as { response?: { statusCode?: unknown; status?: unknown } }).response;
+  const maybeStatusCode = maybeResponse?.statusCode;
+  if (typeof maybeStatusCode === 'number' && Number.isFinite(maybeStatusCode)) return maybeStatusCode;
+
+  const maybeStatus = maybeResponse?.status;
+  if (typeof maybeStatus === 'number' && Number.isFinite(maybeStatus)) return maybeStatus;
+
+  const message =
+    typeof (err as { message?: unknown }).message === 'string' ? String((err as { message?: unknown }).message) : String(err);
+
+  const match =
+    message.match(/status code\s+(\d{3})/i) ||
+    message.match(/\b(\d{3})\s*\(.*\)\s*$/i); // best-effort fallback
+
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function asError(value: unknown): Error | undefined {
   if (value instanceof Error) return value;
   return undefined;

@@ -8,7 +8,7 @@ import 'dotenv/config';
 import { AuthError, loginAndGetToken, discoverBlacklaneUserId } from './core/auth';
 import { ReauthRequiredError, SniperLoop, type BotFilters } from './core';
 import { BlacklaneApi, BotStateService, RideSyncService } from './services';
-import { isLikelyDatabaseDown, logger, toErrorDetails, triggerAuthErrorWebhook } from './utils';
+import { extractHttpStatusCode, isLikelyDatabaseDown, logger, toErrorDetails, triggerAuthErrorWebhook } from './utils';
 import { getSupabase } from './config/supabase';
 import { decrypt, looksEncrypted } from './utils/crypto';
 
@@ -73,6 +73,18 @@ function resolvePassword(raw: string | null): string {
   return looksEncrypted(raw) ? decrypt(raw) : raw;
 }
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function exponentialBackoffWithJitterMs(attempt: number): number {
+  const baseMs = 1_000;
+  const capMs = 180_000; // 3 minutes
+  const expMs = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));
+  const jitterFactor = 0.8 + Math.random() * 0.4; // +/- 20%
+  return Math.floor(expMs * jitterFactor);
+}
+
 /** Runs a single bot's sniper session. Fire-and-forget. */
 async function runBotInstance(
   bot: RunningBotRow,
@@ -98,8 +110,8 @@ async function runBotInstance(
       : undefined;
 
   let reauthAttempts = 0;
-  const maxReauthAttempts = 1;
   let consecutiveImmediateFatalErrors = 0;
+  let consecutiveProxyNetworkRestarts = 0;
 
   try {
     while (true) {
@@ -193,19 +205,51 @@ async function runBotInstance(
           continue;
         }
 
-        if (err instanceof ReauthRequiredError && reauthAttempts < maxReauthAttempts) {
+        // Re-auth requested by SniperLoop after 3 consecutive 502/503 gateway errors.
+        // We keep retrying indefinitely (with backoff), we do NOT mark ERROR_AUTH for proxy/network issues.
+        if (err instanceof ReauthRequiredError) {
           reauthAttempts += 1;
+          consecutiveProxyNetworkRestarts += 1;
+          const delayMs = exponentialBackoffWithJitterMs(reauthAttempts);
           logger.warn(
-            `${prefix()} Gateway persisted → attempting Playwright re-auth (Attempt ${reauthAttempts}/${maxReauthAttempts})`
+            `${prefix()} Gateway persisted (502/503 3x) → attempting Playwright re-auth (attempt ${reauthAttempts}). Backoff ${delayMs}ms.`
           );
           await botState.saveSession({}).catch((saveErr) => {
             logger.warn(`${prefix()} Failed to clear session during reauth`, { ...toErrorDetails(saveErr) });
           });
+          await sleepMs(delayMs);
+          continue;
+        }
+
+        // If the bot crashed out because of proxy/network instability, keep it running.
+        const statusCode = extractHttpStatusCode(err);
+        const message = err instanceof Error ? err.message : String(err);
+        const messageLower = message.toLowerCase();
+        const looksLikeProxyNetworkError =
+          statusCode === 502 ||
+          statusCode === 503 ||
+          messageLower.includes('timeout awaiting') ||
+          messageLower.includes('err_tunnel_connection_failed') ||
+          messageLower.includes('err_proxy_connection_failed') ||
+          messageLower.includes('bad gateway') ||
+          messageLower.includes('proxy server rejected');
+
+        if (looksLikeProxyNetworkError) {
+          consecutiveProxyNetworkRestarts += 1;
+          const delayMs = exponentialBackoffWithJitterMs(consecutiveProxyNetworkRestarts);
+          logger.warn(
+            `${prefix()} Proxy/network failure caused bot restart. Skipping ERROR_AUTH and retrying after ${delayMs}ms.`,
+            {
+              ...toErrorDetails(err),
+              statusCode,
+              consecutiveProxyNetworkRestarts,
+            }
+          );
+          await sleepMs(delayMs);
           continue;
         }
 
         consecutiveImmediateFatalErrors += 1;
-        const message = err instanceof Error ? err.message : String(err);
         const errorLog =
           err instanceof Error
             ? (err.stack ? `${err.name}: ${err.message}\n${err.stack}` : `${err.name}: ${err.message}`)

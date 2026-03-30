@@ -4,7 +4,7 @@
 
 import type { AuthCookie } from '../core/auth';
 import { getOfferPrice } from '../core/filter-engine';
-import { logger } from '../utils';
+import { extractHttpStatusCode, logger } from '../utils';
 import crypto from 'node:crypto';
 
 type ScrapingClient = {
@@ -401,8 +401,9 @@ export class BlacklaneApi {
   }
 
   private shouldRetryWithProxyRotation(error: unknown): boolean {
-    const status = this.getHttpStatus(error);
+    const status = this.getHttpStatus(error) ?? extractHttpStatusCode(error);
     if (status === 401 || status === 429) return false;
+    if (status === 502 || status === 503 || status === 504) return true;
 
     const err = error as Error | undefined;
     const maybeCode = (error as { code?: unknown } | undefined)?.code;

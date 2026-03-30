@@ -8,7 +8,7 @@ import { InvalidOfferStateError, RateLimitError, TokenExpiredError } from '../se
 import { getGlobalSettings } from '../config/global-settings';
 import { FilterEngine, getOfferPrice, resolveOfferLocations, type BotFilters, type ExistingRide, type IncludedResource, type OfferShape } from './filter-engine';
 import { getSupabase } from '../config/supabase';
-import { isLikelyDatabaseDown, logger, toErrorDetails } from '../utils';
+import { extractHttpStatusCode, isLikelyDatabaseDown, logger, toErrorDetails } from '../utils';
 
 const HEARTBEAT_INTERVAL_CYCLES = 5;
 const RATE_LIMIT_BACKOFF_SECONDS = 300; // 5 minutes
@@ -182,6 +182,15 @@ function randomSleep(minMs: number, maxMs: number): Promise<void> {
   return sleep(ms);
 }
 
+function exponentialBackoffWithJitterMs(attempt: number): number {
+  // attempt starts at 1
+  const baseMs = 1_000;
+  const capMs = 180_000; // 3 minutes
+  const expMs = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));
+  const jitterFactor = 0.8 + Math.random() * 0.4; // +/- 20%
+  return Math.floor(expMs * jitterFactor);
+}
+
 function isSoftNetworkError(err: unknown, statusCode?: number): boolean {
   if (statusCode === 401 || statusCode === 403) return false;
 
@@ -191,7 +200,9 @@ function isSoftNetworkError(err: unknown, statusCode?: number): boolean {
   const message = typeof maybeErr?.message === 'string' ? maybeErr.message.toLowerCase() : String(err).toLowerCase();
 
   if (name === 'timeouterror') return true;
-  if (statusCode === 502 || statusCode === 503 || statusCode === 504) return true;
+  // 502/503 are handled in a dedicated "gateway" branch to keep the 3-rotations -> re-auth policy.
+  if (statusCode === 502 || statusCode === 503) return false;
+  if (statusCode === 504) return true;
 
   const networkCodes = new Set([
     'ECONNRESET',
@@ -208,6 +219,7 @@ function isSoftNetworkError(err: unknown, statusCode?: number): boolean {
     message.includes('err_tunnel_connection_failed') ||
     message.includes('err_proxy_connection_failed') ||
     message.includes('socket hang up') ||
+    message.includes('bad gateway') ||
     message.includes('network') ||
     message.includes('timeout')
   );
@@ -309,6 +321,8 @@ export class SniperLoop {
   private readonly timezoneId: string | undefined;
   /** Consecutive gateway errors (5xx like 502/503) seen in the hot loop. */
   private consecutiveGatewayErrors = 0;
+  /** Consecutive proxy/network errors (timeouts, tunnel failures, etc.). Used for exponential backoff. */
+  private consecutiveNetworkProxyErrors = 0;
   /** Consecutive non-gateway runtime errors without dedicated retry policy. */
   private consecutiveUnknownErrors = 0;
   /** Last local (bot timezone) date when blackoutDates pruning ran. */
@@ -469,6 +483,9 @@ export class SniperLoop {
           }
 
           const data = await this.api.getOffers();
+          // Reset proxy/network error counters once we successfully fetch offers.
+          this.consecutiveNetworkProxyErrors = 0;
+          this.consecutiveGatewayErrors = 0;
           requestCount += 1;
           const offers = getOffersList(data);
           const included = getIncludedList(data);
@@ -582,7 +599,10 @@ export class SniperLoop {
               throw err;
             });
           }
+          // Successful cycle => reset network/gateway/unknown error counters.
           this.consecutiveUnknownErrors = 0;
+          this.consecutiveGatewayErrors = 0;
+          this.consecutiveNetworkProxyErrors = 0;
 
           if (!this.isRunning) break;
           const { sniper_delay_min_ms, sniper_delay_max_ms } = await getGlobalSettings();
@@ -668,78 +688,93 @@ export class SniperLoop {
               }
             );
           } else {
-            const maybeStatus = (err as any)?.response?.status;
-            const statusCode =
-              typeof maybeStatus === 'number' && Number.isFinite(maybeStatus)
-                ? maybeStatus
-                : undefined;
+            const statusCode = extractHttpStatusCode(err);
 
-            if (isSoftNetworkError(err, statusCode)) {
-              this.consecutiveUnknownErrors = 0;
-              this.consecutiveGatewayErrors = 0;
-              logger.warn(
-                `${this.logPrefix} [NETWORK] Lenteur du proxy ou erreur reseau ignoree. Reprise au prochain cycle.`,
-                { ...toErrorDetails(err), statusCode }
-              );
-              this.api.rotateProxySession(
-                statusCode === 502 || statusCode === 503 || statusCode === 504 ? 'gateway' : 'tunnel'
-              );
-              const { sniper_delay_min_ms, sniper_delay_max_ms } = await getGlobalSettings();
-              await randomSleep(sniper_delay_min_ms, sniper_delay_max_ms);
-              continue;
-            }
-
+            // Gateway policy: 502/503 => rotate and count 3 consecutive -> force re-auth, then keep going.
             if (statusCode === 502 || statusCode === 503) {
               this.consecutiveUnknownErrors = 0;
               this.consecutiveGatewayErrors += 1;
-              console.error(
-                `${this.logPrefix} Gateway error (${statusCode}) in sniper cycle. Count=${this.consecutiveGatewayErrors}.`,
-                toErrorDetails(err)
+              this.consecutiveNetworkProxyErrors += 1;
+
+              const delayMs = exponentialBackoffWithJitterMs(this.consecutiveNetworkProxyErrors);
+              logger.warn(
+                `${this.logPrefix} [GATEWAY] Proxy/route error (${statusCode}) → rotate (${this.consecutiveGatewayErrors}/3) and backoff ${delayMs}ms.`,
+                {
+                  ...toErrorDetails(err),
+                  statusCode,
+                  consecutiveGatewayErrors: this.consecutiveGatewayErrors,
+                  consecutiveNetworkProxyErrors: this.consecutiveNetworkProxyErrors,
+                }
               );
-              // Auto-heal: rotate proxy session so next cycle uses a fresh IP.
+
               this.api.rotateProxySession('gateway');
 
               if (this.consecutiveGatewayErrors >= 3) {
-                console.error(
-                  `${this.logPrefix} Gateway error (${statusCode}) occurred 3 times in a row → marking bot as ERROR_AUTH.`
-                );
-                // Stop the loop and ask Fleet Manager to re-auth with Playwright.
-                // We do NOT mark ERROR_AUTH here; re-auth is attempted first in runBotInstance.
-                throw new ReauthRequiredError('Gateway errors persisted after proxy rotation');
+                throw new ReauthRequiredError('Gateway errors persisted after 3 proxy rotations');
               }
-            } else {
-              this.consecutiveGatewayErrors = 0;
-              this.consecutiveUnknownErrors += 1;
-              console.error(
-                `${this.logPrefix} Erreur cycle (${this.consecutiveUnknownErrors}/${MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH}):`,
-                toErrorDetails(err)
-              );
-              logger.error(`${this.logPrefix} Unhandled sniper cycle error`, {
-                consecutiveUnknownErrors: this.consecutiveUnknownErrors,
-                ...toErrorDetails(err),
-              });
-              if (this.consecutiveUnknownErrors < MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH) {
-                logger.warn(
-                  `${this.logPrefix} Will retry unknown cycle error before marking ERROR_AUTH.`
-                );
-                continue;
-              }
-              if (this.botState) {
-                await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
-                  logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH after repeated unknown errors`, {
-                    ...toErrorDetails(statusErr),
-                  });
-                });
-              }
-              if (isLikelyDatabaseDown(err)) {
-                this.isStandby = true;
-                logger.warn(`${this.logPrefix} Database down detected in unknown error path; staying alive in standby`, {
-                  ...toErrorDetails(err),
-                });
-                continue;
-              }
-              throw err;
+
+              await sleep(delayMs);
+              continue;
             }
+
+            // Soft network policy: timeouts/tunnel failures/etc => rotate and keep retrying forever with backoff.
+            if (isSoftNetworkError(err, statusCode)) {
+              this.consecutiveUnknownErrors = 0;
+              this.consecutiveGatewayErrors = 0;
+              this.consecutiveNetworkProxyErrors += 1;
+
+              const delayMs = exponentialBackoffWithJitterMs(this.consecutiveNetworkProxyErrors);
+              logger.warn(
+                `${this.logPrefix} [NETWORK] Proxy/network issue (statusCode=${statusCode ?? 'n/a'}) → rotate and backoff ${delayMs}ms.`,
+                {
+                  ...toErrorDetails(err),
+                  statusCode,
+                  consecutiveNetworkProxyErrors: this.consecutiveNetworkProxyErrors,
+                }
+              );
+
+              this.api.rotateProxySession(statusCode === 504 ? 'gateway' : 'tunnel');
+              await sleep(delayMs);
+              continue;
+            }
+
+            // Unknown errors: bounded retry then ERROR_AUTH (non-network errors).
+            this.consecutiveGatewayErrors = 0;
+            this.consecutiveUnknownErrors += 1;
+            console.error(
+              `${this.logPrefix} Erreur cycle (${this.consecutiveUnknownErrors}/${MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH}):`,
+              toErrorDetails(err)
+            );
+            logger.error(`${this.logPrefix} Unhandled sniper cycle error`, {
+              consecutiveUnknownErrors: this.consecutiveUnknownErrors,
+              ...toErrorDetails(err),
+            });
+
+            if (this.consecutiveUnknownErrors < MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH) {
+              logger.warn(`${this.logPrefix} Will retry unknown cycle error before marking ERROR_AUTH.`);
+              continue;
+            }
+
+            if (this.botState) {
+              await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
+                logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH after repeated unknown errors`, {
+                  ...toErrorDetails(statusErr),
+                });
+              });
+            }
+
+            if (isLikelyDatabaseDown(err)) {
+              this.isStandby = true;
+              logger.warn(
+                `${this.logPrefix} Database down detected in unknown error path; staying alive in standby`,
+                {
+                  ...toErrorDetails(err),
+                }
+              );
+              continue;
+            }
+
+            throw err;
           }
         }
       }
@@ -754,11 +789,20 @@ export class SniperLoop {
         }
         return;
       }
-      if (this.botState) {
+
+      const statusCode = extractHttpStatusCode(err);
+      const isProxyOrNetwork =
+        statusCode === 502 || statusCode === 503 || isSoftNetworkError(err, statusCode);
+      if (this.botState && !isProxyOrNetwork) {
         await this.botState.updateStatus('ERROR_AUTH').catch((statusErr) => {
           logger.warn(`${this.logPrefix} Failed to set ERROR_AUTH in top-level sniper catch`, {
             ...toErrorDetails(statusErr),
           });
+        });
+      } else if (this.botState && isProxyOrNetwork) {
+        logger.warn(`${this.logPrefix} Top-level proxy/network error: skipping ERROR_AUTH status update.`, {
+          ...toErrorDetails(err),
+          statusCode,
         });
       }
       throw err;
