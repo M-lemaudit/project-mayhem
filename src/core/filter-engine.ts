@@ -3,11 +3,11 @@
  * New location-based filters use the JSON:API `included` array for pickup/dropoff resolution.
  */
 
-import { logger } from '../utils';
+import { isEnvFlagEnabled, logger } from '../utils';
 
-const FILTER_TRACE_ENABLED = process.env.FILTER_TRACE === 'true';
+const FILTER_TRACE_ENABLED = isEnvFlagEnabled(process.env.FILTER_TRACE);
 const FILTER_TRACE_FULL_EVAL =
-  FILTER_TRACE_ENABLED && process.env.FILTER_TRACE_FULL_EVAL === 'true';
+  FILTER_TRACE_ENABLED && isEnvFlagEnabled(process.env.FILTER_TRACE_FULL_EVAL);
 
 export interface BotFilters {
   minPrice: number;

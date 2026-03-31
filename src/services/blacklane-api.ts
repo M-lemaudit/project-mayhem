@@ -4,7 +4,7 @@
 
 import type { AuthCookie } from '../core/auth';
 import { getOfferPrice } from '../core/filter-engine';
-import { extractHttpStatusCode, logger } from '../utils';
+import { extractHttpStatusCode, isEnvFlagEnabled, logger } from '../utils';
 import crypto from 'node:crypto';
 
 type ScrapingClient = {
@@ -591,7 +591,7 @@ export class BlacklaneApi {
       'content-type': 'application/json',
     };
 
-    const isProduction = process.env.IS_PRODUCTION?.toLowerCase().trim() === 'true';
+    const isProduction = isEnvFlagEnabled(process.env.IS_PRODUCTION);
     if (!isProduction) {
       // Safety kill-switch: never hit the real endpoint outside production.
       logger.info(

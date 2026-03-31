@@ -8,7 +8,13 @@ import { InvalidOfferStateError, RateLimitError, TokenExpiredError } from '../se
 import { getGlobalSettings } from '../config/global-settings';
 import { FilterEngine, getOfferPrice, resolveOfferLocations, type BotFilters, type ExistingRide, type IncludedResource, type OfferShape } from './filter-engine';
 import { getSupabase } from '../config/supabase';
-import { extractHttpStatusCode, isLikelyDatabaseDown, logger, toErrorDetails } from '../utils';
+import {
+  extractHttpStatusCode,
+  isLikelyDatabaseDown,
+  logger,
+  toErrorDetails,
+  triggerOfferAcceptErrorWebhook,
+} from '../utils';
 
 const HEARTBEAT_INTERVAL_CYCLES = 5;
 const RATE_LIMIT_BACKOFF_SECONDS = 300; // 5 minutes
@@ -313,6 +319,7 @@ export class SniperLoop {
   isRunning = false;
   filters: BotFilters;
   private readonly logPrefix: string;
+  private readonly botEmail: string;
   /** IDs of offers already matched (simulation) to avoid re-matching and repeated notifs/restarts. */
   private processedOfferIds = new Set<string>();
   /** Bot UUID for querying rides (time-gap check). */
@@ -338,6 +345,7 @@ export class SniperLoop {
     timezoneId?: string
   ) {
     this.filters = filters;
+    this.botEmail = botEmail ?? 'unknown';
     this.logPrefix = botEmail ? `[${botEmail}]` : '[BOT]';
     this.botId = botId;
     this.timezoneId = timezoneId?.trim() || undefined;
@@ -525,6 +533,9 @@ export class SniperLoop {
               );
 
               if (result.match) {
+                console.log(
+                  `${this.logPrefix} ✅ Offer ${idStr} matched filters. Sending accept request...`
+                );
                 this.processedOfferIds.add(idStr);
                 if (this.processedOfferIds.size > PROCESSED_OFFER_IDS_MAX) {
                   this.processedOfferIds.clear();
@@ -543,7 +554,43 @@ export class SniperLoop {
                       logger.warn(`${this.logPrefix} Failed to report match`, { ...toErrorDetails(err) });
                     });
                 }
-                await this.api.acceptOffer(offer);
+                try {
+                  await this.api.acceptOffer(offer);
+                } catch (acceptErr) {
+                  // Keep bot alive on accept failures; notify webhook and continue loop.
+                  this.processedOfferIds.delete(idStr);
+                  const statusCode = extractHttpStatusCode(acceptErr);
+                  const message =
+                    acceptErr instanceof Error && acceptErr.message
+                      ? acceptErr.message
+                      : String(acceptErr);
+                  const reason =
+                    acceptErr instanceof InvalidOfferStateError
+                      ? 'invalid_offer_state'
+                      : 'accept_request_failed';
+
+                  logger.warn(`${this.logPrefix} Accept request failed for offer ${idStr}`, {
+                    offerId: idStr,
+                    statusCode,
+                    reason,
+                    ...toErrorDetails(acceptErr),
+                  });
+
+                  await triggerOfferAcceptErrorWebhook(
+                    this.botEmail,
+                    idStr,
+                    message,
+                    reason,
+                    statusCode,
+                    {
+                      offerId: idStr,
+                      statusCode,
+                      ...toErrorDetails(acceptErr),
+                    }
+                  );
+
+                  continue;
+                }
                 if (this.botId) {
                   try {
                     const { pickup, dropoff } = resolveOfferLocations(offer, included);
