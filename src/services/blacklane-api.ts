@@ -575,13 +575,17 @@ export class BlacklaneApi {
   async acceptOffer(
     offer: any
   ): Promise<{ status: string; offer_id?: string } | Record<string, unknown>> {
-    const url = 'https://partner-portal-api.blacklane.com/chauffeur/offers';
+    const partnerUrl = 'https://partner-portal-api.blacklane.com/chauffeur/offers';
     const priceFromFilter = getOfferPrice(offer);
     const cleanPrice =
       typeof priceFromFilter === 'number' && Number.isFinite(priceFromFilter) ? priceFromFilter : 0;
+    const offerId = typeof offer?.id === 'string' && offer.id.trim() ? offer.id.trim() : '';
+    if (!offerId) {
+      throw new Error('Cannot accept offer: missing offer.id');
+    }
     const payload = {
       action: 'accept',
-      id: offer?.id,
+      id: offerId,
       price: cleanPrice,
     };
 
@@ -595,31 +599,83 @@ export class BlacklaneApi {
     if (!isProduction) {
       // Safety kill-switch: never hit the real endpoint outside production.
       logger.info(
-        `[SIMULATION] Would send POST to ${url} with Payload: ${JSON.stringify(
+        `[SIMULATION] Would send POST to ${partnerUrl} with Payload: ${JSON.stringify(
           payload
         )} (cleanPrice: ${cleanPrice}) and Headers: ${JSON.stringify(headers)}`
       );
       return { status: 'simulation_success', offer_id: payload.id as string | undefined };
     }
 
+    const attempts: Array<{
+      label: string;
+      url: string;
+      options: Record<string, unknown>;
+    }> = [
+      {
+        // Primary path: athena hades accept endpoint (legacy sniper flow).
+        label: 'athena hades accept endpoint (action+id+price)',
+        url: `hades/offers/${offerId}/accept`,
+        options: { json: payload },
+      },
+      {
+        // Some deployments expect only price on this route.
+        label: 'athena hades accept endpoint (price only)',
+        url: `hades/offers/${offerId}/accept`,
+        options: { json: { price: cleanPrice } },
+      },
+      {
+        // Some variants expect no JSON body.
+        label: 'athena hades accept endpoint (empty body)',
+        url: `hades/offers/${offerId}/accept`,
+        options: {},
+      },
+      {
+        // Fallback: partner-portal endpoint variant.
+        label: 'partner-portal chauffeur endpoint',
+        url: partnerUrl,
+        options: { json: payload, headers },
+      },
+    ];
+
     try {
       const client = await this.getClient();
-      const response = await client.post<unknown>(url, { json: payload, headers });
-      logger.info(
-        `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${url} succeeded.`
-      );
-      return response.body as { status: string; offer_id?: string } | Record<string, unknown>;
-    } catch (error) {
-      const status = this.getHttpStatus(error);
-      const parsedBody = this.parseErrorBody(error);
-      const code = parsedBody?.code;
-      if (status === 410 && code === 'invalid_state') {
-        logger.info(
-          `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
-        );
-        throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
+      let lastError: unknown;
+      for (let i = 0; i < attempts.length; i += 1) {
+        const attempt = attempts[i];
+        try {
+          const response = await client.post<unknown>(attempt.url, attempt.options);
+          logger.info(
+            `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${attempt.url} succeeded (${attempt.label}).`
+          );
+          return response.body as { status: string; offer_id?: string } | Record<string, unknown>;
+        } catch (error) {
+          lastError = error;
+          const status = this.getHttpStatus(error);
+          const parsedBody = this.parseErrorBody(error);
+          const code = parsedBody?.code;
+          if (status === 410 && code === 'invalid_state') {
+            logger.info(
+              `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
+            );
+            throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
+          }
+          const canFallback = status === 404 && i < attempts.length - 1;
+          if (canFallback) {
+            logger.warn(
+              `[PRODUCTION] Accept endpoint returned 404 on ${attempt.label}; trying fallback endpoint.`,
+              {
+                offerId,
+                attemptedUrl: attempt.url,
+              }
+            );
+            continue;
+          }
+          throw this.normalizeRequestError(error);
+        }
       }
-      throw this.normalizeRequestError(error);
+      throw this.normalizeRequestError(lastError);
+    } catch (error) {
+      throw error;
     }
   }
 }
