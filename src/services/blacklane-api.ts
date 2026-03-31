@@ -540,66 +540,64 @@ export class BlacklaneApi {
    */
   async getPlannedRides(): Promise<PlannedRide[]> {
     const allRides: PlannedRide[] = [];
-    let nextUrl: string | null = null;
-    let pageCount = 0;
+    const client = await this.getClient();
+    const firstPageTargets = Array.from(
+      new Set<string>(['hades/rides', ATHENA_HADES_RIDES_URL, PARTNER_HADES_RIDES_URL])
+    );
 
-    do {
-      let body: unknown;
-      const requestTarget = this.getPathOrUrl(nextUrl ?? 'hades/rides');
+    let selectedTarget: string | null = null;
+    for (const target of firstPageTargets) {
       try {
-        const client = await this.getClient();
-        if (!nextUrl) {
-          const firstPageTargets = Array.from(
-            new Set<string>([requestTarget, ATHENA_HADES_RIDES_URL, PARTNER_HADES_RIDES_URL])
-          );
-          let firstPageError: unknown;
-          let resolved = false;
-          for (const target of firstPageTargets) {
-            try {
-              const response = await client.get<unknown>(target, {
-                searchParams: PLANNED_RIDES_PARAMS,
-              });
-              body = response.body;
-              resolved = true;
-              break;
-            } catch (firstErr) {
-              firstPageError = firstErr;
-              const status = this.getHttpStatus(firstErr);
-              const canFallback = status === 404 && target !== firstPageTargets[firstPageTargets.length - 1];
-              logger.warn(`[NETWORK] getPlannedRides first page attempt failed for ${this.label}`, {
-                target,
-                statusCode: status,
-                canFallback,
-              });
-              if (canFallback) continue;
-              throw firstErr;
-            }
-          }
-          if (!resolved) throw firstPageError;
-        } else {
-          const response = await client.get<unknown>(requestTarget);
-          body = response.body;
+        const response = await client.get<unknown>(target, {
+          searchParams: PLANNED_RIDES_PARAMS,
+        });
+        const bodyRecord = response.body as Record<string, unknown> | undefined;
+        const pageRides = mapPlannedRidesResponse(bodyRecord);
+        allRides.push(...pageRides);
+        selectedTarget = target;
+        break;
+      } catch (firstErr) {
+        const status = this.getHttpStatus(firstErr);
+        const canFallback = status === 404 && target !== firstPageTargets[firstPageTargets.length - 1];
+        logger.warn(`[NETWORK] getPlannedRides first page attempt failed for ${this.label}`, {
+          target,
+          statusCode: status,
+          canFallback,
+        });
+        if (!canFallback) {
+          throw this.normalizeRequestError(firstErr);
         }
+      }
+    }
+
+    if (!selectedTarget) {
+      throw new Error('getPlannedRides: no reachable endpoint for first page');
+    }
+
+    // Manual page-number pagination to avoid unreliable links.next URLs (some return 404).
+    for (let pageNumber = 2; pageNumber <= MAX_PLANNED_RIDES_PAGES; pageNumber += 1) {
+      const params = {
+        ...PLANNED_RIDES_PARAMS,
+        'page[number]': pageNumber,
+      };
+      try {
+        const response = await client.get<unknown>(selectedTarget, {
+          searchParams: params,
+        });
+        const bodyRecord = response.body as Record<string, unknown> | undefined;
+        const pageRides = mapPlannedRidesResponse(bodyRecord);
+        if (pageRides.length === 0) break;
+        allRides.push(...pageRides);
       } catch (error) {
-        logger.warn(`[NETWORK] getPlannedRides request failed for ${this.label}`, {
-          requestTarget,
-          pageCount: pageCount + 1,
-          hasNextUrl: Boolean(nextUrl),
+        const status = this.getHttpStatus(error);
+        logger.warn(`[NETWORK] getPlannedRides page request failed for ${this.label}`, {
+          selectedTarget,
+          pageNumber,
+          statusCode: status,
         });
         throw this.normalizeRequestError(error);
       }
-
-      const bodyRecord = body as Record<string, unknown> | undefined;
-      const pageRides = mapPlannedRidesResponse(bodyRecord);
-      allRides.push(...pageRides);
-
-      pageCount += 1;
-      const links = bodyRecord?.links as { next?: string | null } | undefined;
-      nextUrl = links?.next ?? null;
-      if (nextUrl == null || nextUrl === '' || pageCount >= MAX_PLANNED_RIDES_PAGES) {
-        break;
-      }
-    } while (true);
+    }
 
     return allRides;
   }
