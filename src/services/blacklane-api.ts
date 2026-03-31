@@ -327,6 +327,7 @@ export class BlacklaneApi {
   /** Blacklane internal user id used for authenticated actions on partner portal. */
   private readonly blacklaneUserId: string;
   private readonly label: string;
+  private readonly userAgent: string;
   private baseProxyUrl: string;
   private currentProxyUrl: string;
   private accessToken: string;
@@ -336,7 +337,7 @@ export class BlacklaneApi {
     label: string,
     accessToken: string,
     cookies: AuthCookie[],
-    _userAgent: string,
+    userAgent: string,
     blacklaneUserId: string
   ) {
     if (!BASE_URL) {
@@ -344,6 +345,7 @@ export class BlacklaneApi {
     }
     this.label = label;
     this.blacklaneUserId = blacklaneUserId;
+    this.userAgent = userAgent;
     this.accessToken = accessToken;
     this.cookies = cookies;
     this.baseProxyUrl = process.env.PROXY_URL?.trim() || '';
@@ -626,9 +628,11 @@ export class BlacklaneApi {
     };
 
     const headers = {
+      accept: '*/*',
       'blacklane-user-id': this.blacklaneUserId,
       'blacklane-user-roles': 'dispatcher,driver,provider',
       'content-type': 'application/json',
+      'x-user-agent': this.userAgent,
     };
 
     const isProduction = isEnvFlagEnabled(process.env.IS_PRODUCTION);
