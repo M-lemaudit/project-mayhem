@@ -144,6 +144,8 @@ const PLANNED_RIDES_PARAMS = {
 };
 
 const MAX_PLANNED_RIDES_PAGES = Number(process.env.BLACKLANE_MAX_PLANNED_RIDES_PAGES) || 50;
+const ATHENA_HADES_RIDES_URL = 'https://athena.blacklane.com/hades/rides';
+const PARTNER_HADES_RIDES_URL = 'https://partner-portal-api.blacklane.com/hades/rides';
 
 /** Planned ride returned by getPlannedRides() (times as Date). */
 export interface PlannedRide {
@@ -546,10 +548,38 @@ export class BlacklaneApi {
       const requestTarget = this.getPathOrUrl(nextUrl ?? 'hades/rides');
       try {
         const client = await this.getClient();
-        const response = await client.get<unknown>(requestTarget, {
-          ...(nextUrl ? {} : { searchParams: PLANNED_RIDES_PARAMS }),
-        });
-        body = response.body;
+        if (!nextUrl) {
+          const firstPageTargets = Array.from(
+            new Set<string>([requestTarget, ATHENA_HADES_RIDES_URL, PARTNER_HADES_RIDES_URL])
+          );
+          let firstPageError: unknown;
+          let resolved = false;
+          for (const target of firstPageTargets) {
+            try {
+              const response = await client.get<unknown>(target, {
+                searchParams: PLANNED_RIDES_PARAMS,
+              });
+              body = response.body;
+              resolved = true;
+              break;
+            } catch (firstErr) {
+              firstPageError = firstErr;
+              const status = this.getHttpStatus(firstErr);
+              const canFallback = status === 404 && target !== firstPageTargets[firstPageTargets.length - 1];
+              logger.warn(`[NETWORK] getPlannedRides first page attempt failed for ${this.label}`, {
+                target,
+                statusCode: status,
+                canFallback,
+              });
+              if (canFallback) continue;
+              throw firstErr;
+            }
+          }
+          if (!resolved) throw firstPageError;
+        } else {
+          const response = await client.get<unknown>(requestTarget);
+          body = response.body;
+        }
       } catch (error) {
         logger.warn(`[NETWORK] getPlannedRides request failed for ${this.label}`, {
           requestTarget,
