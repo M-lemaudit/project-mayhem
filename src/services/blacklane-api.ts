@@ -136,12 +136,14 @@ const UPCOMING_BOOKINGS_PARAMS = {
 /** Query params for GET /hades/rides (planned rides). */
 const PLANNED_RIDES_PARAMS = {
   'page[number]': 1,
-  'page[size]': 50,
-  include: 'pickup_location,dropoff_location',
+  // Keep this aligned with observed partner-portal request shape.
+  'page[size]': 30,
+  include:
+    'pickup_location,dropoff_location,accepted_by,assigned_driver,assigned_vehicle,available_drivers,available_vehicles,status_updates',
   'filter[group]': 'planned',
 };
 
-const MAX_PLANNED_RIDES_PAGES = 10;
+const MAX_PLANNED_RIDES_PAGES = Number(process.env.BLACKLANE_MAX_PLANNED_RIDES_PAGES) || 50;
 
 /** Planned ride returned by getPlannedRides() (times as Date). */
 export interface PlannedRide {
@@ -541,13 +543,19 @@ export class BlacklaneApi {
 
     do {
       let body: unknown;
+      const requestTarget = this.getPathOrUrl(nextUrl ?? 'hades/rides');
       try {
         const client = await this.getClient();
-        const response = await client.get<unknown>(this.getPathOrUrl(nextUrl ?? 'hades/rides'), {
+        const response = await client.get<unknown>(requestTarget, {
           ...(nextUrl ? {} : { searchParams: PLANNED_RIDES_PARAMS }),
         });
         body = response.body;
       } catch (error) {
+        logger.warn(`[NETWORK] getPlannedRides request failed for ${this.label}`, {
+          requestTarget,
+          pageCount: pageCount + 1,
+          hasNextUrl: Boolean(nextUrl),
+        });
         throw this.normalizeRequestError(error);
       }
 
@@ -606,76 +614,24 @@ export class BlacklaneApi {
       return { status: 'simulation_success', offer_id: payload.id as string | undefined };
     }
 
-    const attempts: Array<{
-      label: string;
-      url: string;
-      options: Record<string, unknown>;
-    }> = [
-      {
-        // Primary path: athena hades accept endpoint (legacy sniper flow).
-        label: 'athena hades accept endpoint (action+id+price)',
-        url: `hades/offers/${offerId}/accept`,
-        options: { json: payload },
-      },
-      {
-        // Some deployments expect only price on this route.
-        label: 'athena hades accept endpoint (price only)',
-        url: `hades/offers/${offerId}/accept`,
-        options: { json: { price: cleanPrice } },
-      },
-      {
-        // Some variants expect no JSON body.
-        label: 'athena hades accept endpoint (empty body)',
-        url: `hades/offers/${offerId}/accept`,
-        options: {},
-      },
-      {
-        // Fallback: partner-portal endpoint variant.
-        label: 'partner-portal chauffeur endpoint',
-        url: partnerUrl,
-        options: { json: payload, headers },
-      },
-    ];
-
     try {
       const client = await this.getClient();
-      let lastError: unknown;
-      for (let i = 0; i < attempts.length; i += 1) {
-        const attempt = attempts[i];
-        try {
-          const response = await client.post<unknown>(attempt.url, attempt.options);
-          logger.info(
-            `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${attempt.url} succeeded (${attempt.label}).`
-          );
-          return response.body as { status: string; offer_id?: string } | Record<string, unknown>;
-        } catch (error) {
-          lastError = error;
-          const status = this.getHttpStatus(error);
-          const parsedBody = this.parseErrorBody(error);
-          const code = parsedBody?.code;
-          if (status === 410 && code === 'invalid_state') {
-            logger.info(
-              `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
-            );
-            throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
-          }
-          const canFallback = status === 404 && i < attempts.length - 1;
-          if (canFallback) {
-            logger.warn(
-              `[PRODUCTION] Accept endpoint returned 404 on ${attempt.label}; trying fallback endpoint.`,
-              {
-                offerId,
-                attemptedUrl: attempt.url,
-              }
-            );
-            continue;
-          }
-          throw this.normalizeRequestError(error);
-        }
-      }
-      throw this.normalizeRequestError(lastError);
+      const response = await client.post<unknown>(partnerUrl, { json: payload, headers });
+      logger.info(
+        `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${partnerUrl} succeeded.`
+      );
+      return response.body as { status: string; offer_id?: string } | Record<string, unknown>;
     } catch (error) {
-      throw error;
+      const status = this.getHttpStatus(error);
+      const parsedBody = this.parseErrorBody(error);
+      const code = parsedBody?.code;
+      if (status === 410 && code === 'invalid_state') {
+        logger.info(
+          `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
+        );
+        throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
+      }
+      throw this.normalizeRequestError(error);
     }
   }
 }
