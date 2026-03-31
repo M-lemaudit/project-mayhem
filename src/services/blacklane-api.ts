@@ -24,6 +24,7 @@ const OFFERS_PROXY_RETRY_ATTEMPTS = 3;
 
 /** Origin/Referer for athena requests (same-site from partner portal). */
 const PARTNER_ORIGIN = 'https://partner.blacklane.com';
+const ACCEPT_DEBUG = process.env.ACCEPT_DEBUG?.trim().toLowerCase() === 'true';
 
 /** Thrown when API returns 401; trigger re-auth. */
 export class TokenExpiredError extends Error {
@@ -466,6 +467,44 @@ export class BlacklaneApi {
     return undefined;
   }
 
+  private getErrorDebugSnapshot(error: unknown): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    if (typeof error !== 'object' || error == null) return out;
+
+    const err = error as {
+      message?: unknown;
+      code?: unknown;
+      options?: { method?: unknown; url?: unknown; prefixUrl?: unknown; headers?: unknown };
+      request?: { requestUrl?: unknown; options?: { method?: unknown; headers?: unknown } };
+      response?: {
+        statusCode?: unknown;
+        statusMessage?: unknown;
+        requestUrl?: unknown;
+        headers?: unknown;
+        body?: unknown;
+      };
+    };
+
+    if (typeof err.message === 'string') out.errorMessage = err.message;
+    if (typeof err.code === 'string') out.errorCode = err.code;
+    if (err.options?.method != null) out.requestMethod = String(err.options.method);
+    if (err.options?.url != null) out.requestUrlOption = String(err.options.url);
+    if (err.options?.prefixUrl != null) out.requestPrefixUrl = String(err.options.prefixUrl);
+    if (err.request?.requestUrl != null) out.requestUrl = String(err.request.requestUrl);
+    if (err.response?.requestUrl != null) out.responseRequestUrl = String(err.response.requestUrl);
+    if (typeof err.response?.statusCode === 'number') out.responseStatusCode = err.response.statusCode;
+    if (typeof err.response?.statusMessage === 'string') out.responseStatusMessage = err.response.statusMessage;
+    if (err.options?.headers && typeof err.options.headers === 'object') out.requestHeaders = err.options.headers;
+    if (err.response?.headers && typeof err.response.headers === 'object') out.responseHeaders = err.response.headers;
+    if (typeof err.response?.body === 'string') {
+      out.responseBody = err.response.body.slice(0, 2_000);
+    } else if (err.response?.body && typeof err.response.body === 'object') {
+      out.responseBody = err.response.body;
+    }
+
+    return out;
+  }
+
   private normalizeRequestError(error: unknown): Error {
     const status = this.getHttpStatus(error);
     if (status === 401) {
@@ -632,6 +671,7 @@ export class BlacklaneApi {
       'blacklane-user-id': this.blacklaneUserId,
       'blacklane-user-roles': 'dispatcher,driver,provider',
       'content-type': 'application/json',
+      'user-agent': this.userAgent,
       'x-user-agent': this.userAgent,
     };
 
@@ -646,6 +686,14 @@ export class BlacklaneApi {
       return { status: 'simulation_success', offer_id: payload.id as string | undefined };
     }
 
+    if (ACCEPT_DEBUG) {
+      logger.info(`[ACCEPT_DEBUG] Sending accept request for ${this.label}`, {
+        endpoint: partnerUrl,
+        payload,
+        headers,
+      });
+    }
+
     try {
       const client = await this.getClient();
       const response = await client.post<unknown>(partnerUrl, { json: payload, headers });
@@ -657,11 +705,47 @@ export class BlacklaneApi {
       const status = this.getHttpStatus(error);
       const parsedBody = this.parseErrorBody(error);
       const code = parsedBody?.code;
+      logger.warn(`[ACCEPT_DEBUG] Partner accept failed for ${this.label}`, {
+        endpoint: partnerUrl,
+        payload,
+        headers,
+        statusCode: status,
+        parsedBody,
+        ...this.getErrorDebugSnapshot(error),
+      });
       if (status === 410 && code === 'invalid_state') {
         logger.info(
           `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
         );
         throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
+      }
+      if (status === 404) {
+        const hadesPath = `hades/offers/${offerId}/accept`;
+        try {
+          const client = await this.getClient();
+          if (ACCEPT_DEBUG) {
+            logger.info(`[ACCEPT_DEBUG] Retrying on hades accept endpoint for ${this.label}`, {
+              endpoint: hadesPath,
+              payload,
+            });
+          }
+          const retry = await client.post<unknown>(hadesPath, { json: payload });
+          logger.info(
+            `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} - POST to ${hadesPath} succeeded (fallback).`
+          );
+          return retry.body as { status: string; offer_id?: string } | Record<string, unknown>;
+        } catch (fallbackError) {
+          const fallbackStatus = this.getHttpStatus(fallbackError);
+          const fallbackBody = this.parseErrorBody(fallbackError);
+          logger.warn(`[ACCEPT_DEBUG] Hades fallback accept failed for ${this.label}`, {
+            endpoint: hadesPath,
+            payload,
+            statusCode: fallbackStatus,
+            parsedBody: fallbackBody,
+            ...this.getErrorDebugSnapshot(fallbackError),
+          });
+          throw this.normalizeRequestError(fallbackError);
+        }
       }
       throw this.normalizeRequestError(error);
     }
