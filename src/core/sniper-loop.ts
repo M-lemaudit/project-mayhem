@@ -576,18 +576,24 @@ export class SniperLoop {
                     ...toErrorDetails(acceptErr),
                   });
 
-                  await triggerOfferAcceptErrorWebhook(
-                    this.botEmail,
-                    idStr,
-                    message,
-                    reason,
-                    statusCode,
-                    {
-                      offerId: idStr,
+                  if (!(acceptErr instanceof InvalidOfferStateError)) {
+                    await triggerOfferAcceptErrorWebhook(
+                      this.botEmail,
+                      idStr,
+                      message,
+                      reason,
                       statusCode,
-                      ...toErrorDetails(acceptErr),
-                    }
-                  );
+                      {
+                        offerId: idStr,
+                        statusCode,
+                        ...toErrorDetails(acceptErr),
+                      }
+                    );
+                  } else {
+                    logger.info(
+                      `${this.logPrefix} Skipping webhook for expected 410 invalid_state on offer ${idStr}.`
+                    );
+                  }
 
                   continue;
                 }
