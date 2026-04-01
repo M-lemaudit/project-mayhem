@@ -325,6 +325,7 @@ function mapPlannedRidesResponse(data: unknown): PlannedRide[] {
  */
 export class BlacklaneApi {
   private client: ScrapingClient | null = null;
+  private absoluteClient: ScrapingClient | null = null;
   /** Blacklane internal user id used for authenticated actions on partner portal. */
   private readonly blacklaneUserId: string;
   private readonly label: string;
@@ -374,11 +375,38 @@ export class BlacklaneApi {
     });
   }
 
+  private createAbsoluteGotClient(gotScraping: GotScrapingFactory): ScrapingClient {
+    return gotScraping.extend({
+      timeout: { request: REQUEST_TIMEOUT_MS },
+      responseType: 'json',
+      throwHttpErrors: true,
+      retry: { limit: 0 },
+      proxyUrl: this.currentProxyUrl || undefined,
+      headerGeneratorOptions: {
+        browsers: [{ name: 'chrome', minVersion: 120 }],
+        os: ['windows'],
+        devices: ['desktop'],
+      },
+      headers: {
+        ...buildDefaultHeaders(),
+        Authorization: `Bearer ${this.accessToken}`,
+        Cookie: buildCookieHeader(this.cookies),
+      },
+    });
+  }
+
   private async getClient(): Promise<ScrapingClient> {
     if (this.client) return this.client;
     const { gotScraping } = await import('got-scraping');
     this.client = this.createGotClient(gotScraping as unknown as GotScrapingFactory);
     return this.client;
+  }
+
+  private async getAbsoluteClient(): Promise<ScrapingClient> {
+    if (this.absoluteClient) return this.absoluteClient;
+    const { gotScraping } = await import('got-scraping');
+    this.absoluteClient = this.createAbsoluteGotClient(gotScraping as unknown as GotScrapingFactory);
+    return this.absoluteClient;
   }
 
   /**
@@ -391,6 +419,7 @@ export class BlacklaneApi {
     const sessionLabel = getProxySessionLabelFromProxyUrl(nextProxyUrl);
     this.currentProxyUrl = nextProxyUrl;
     this.client = null;
+    this.absoluteClient = null;
 
     if (sessionLabel) {
       logger.warn(
@@ -405,6 +434,7 @@ export class BlacklaneApi {
     this.accessToken = accessToken;
     this.cookies = cookies;
     this.client = null;
+    this.absoluteClient = null;
   }
 
   private shouldRetryWithProxyRotation(error: unknown): boolean {
@@ -695,7 +725,7 @@ export class BlacklaneApi {
     }
 
     try {
-      const client = await this.getClient();
+      const client = await this.getAbsoluteClient();
       const response = await client.post<unknown>(partnerUrl, { json: payload, headers });
       logger.info(
         `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${partnerUrl} succeeded.`
