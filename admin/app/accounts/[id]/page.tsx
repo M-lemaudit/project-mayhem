@@ -40,7 +40,7 @@ export default function AccountPage({ params }: AccountPageProps) {
   };
 
   // Filter states
-  const [minPrice, setMinPrice] = useState(50);
+  const [minPrice, setMinPrice] = useState(40);
   const [maxPrice, setMaxPrice] = useState(400);
   const [minDistance, setMinDistance] = useState(0);
   const [maxDistance, setMaxDistance] = useState(5000);
@@ -60,9 +60,8 @@ export default function AccountPage({ params }: AccountPageProps) {
   const [allowedPickupCities, setAllowedPickupCities] = useState<string[]>([]);
   const [dropoffCityInput, setDropoffCityInput] = useState('');
   const [allowedDropoffCities, setAllowedDropoffCities] = useState<string[]>([]);
-  const [minLeadHours, setMinLeadHours] = useState(24);
+  const [minLeadHours, setMinLeadHours] = useState(0);
   const [timezone, setTimezone] = useState('Europe/Paris');
-  const [workingHours, setWorkingHours] = useState({ start: 6, end: 22 });
   const [isDirty, setIsDirty] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   
@@ -96,7 +95,7 @@ export default function AccountPage({ params }: AccountPageProps) {
 
       // Initialize filters from DB
       const f = botData.filters || {};
-      setMinPrice(Math.min(Number(f.minPrice || f.min_price || 50), 5000));
+      setMinPrice(Math.min(Number(f.minPrice || f.min_price || 40), 5000));
       setMaxPrice(Math.min(Number(f.maxPrice || f.max_price || 400), 5000));
       setMinDistance(Math.min(Number(f.minDistance || f.min_distance || 0), 5000));
       setMaxDistance(Math.min(Number(f.maxDistance || f.max_distance || 5000), 5000));
@@ -170,11 +169,10 @@ export default function AccountPage({ params }: AccountPageProps) {
           ? f.allowedDropoffCities
           : (f.allowedZipCodes || f.allowed_zip_codes || [])) as string[]
       );
-      setMinLeadHours(Number(f.minLeadHours || f.min_lead_hours || 24));
+      setMinLeadHours(Number(f.minLeadHours || f.min_lead_hours || 0));
 
       // Bot level settings
       setTimezone(botData.timezone || 'Europe/Paris');
-      setWorkingHours((botData as any).working_hours || { start: 6, end: 22 });
       
       // Init settings modal fields
       setEditName(botData.name || '');
@@ -225,7 +223,6 @@ export default function AccountPage({ params }: AccountPageProps) {
       .update({
         filters: updatedFilters,
         timezone: timezone,
-        working_hours: workingHours
       })
       .eq('id', id);
 
@@ -474,7 +471,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-white font-bold text-sm">${minPrice} - ${maxPrice}</span>
-                          <span className="text-slate-500 text-xs font-medium">($0 - $5000)</span>
+                          <span className="text-slate-500 text-xs font-medium">($40 - $5000)</span>
                         </div>
                       </div>
 
@@ -494,7 +491,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         {/* Min Thumb Control */}
                         <input
                           type="range"
-                          min="0"
+                          min="40"
                           max="5000"
                           value={minPrice}
                           onChange={(e) => {
@@ -507,7 +504,7 @@ export default function AccountPage({ params }: AccountPageProps) {
                         {/* Max Thumb Control */}
                         <input
                           type="range"
-                          min="0"
+                          min="40"
                           max="5000"
                           value={maxPrice}
                           onChange={(e) => {
@@ -576,57 +573,15 @@ export default function AccountPage({ params }: AccountPageProps) {
                     </div>
                   </div>
 
-                  {/* Operational Hours & Timezone */}
+                  {/* Timezone */}
                   <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-8 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5 space-y-8">
                     <div>
                       <div className="flex items-center gap-3">
                         <span className="material-symbols-outlined text-[#d4af35] text-2xl">public</span>
-                        <h3 className="text-white text-xl font-bold font-display">Time Management</h3>
+                        <h3 className="text-white text-xl font-bold font-display">Timezone</h3>
                       </div>
-                      <p className="text-slate-400 text-sm mt-1">Configure when the bot is allowed to accept new rides.</p>
+                      <p className="text-slate-400 text-sm mt-1">Timezone used for blackout dates and static time windows.</p>
                     </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Start Hour</label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-500 text-sm">schedule</span>
-                          <input
-                            type="time"
-                            step="3600"
-                            value={`${workingHours.start.toString().padStart(2, '0')}:00`}
-                            onChange={(e) => {
-                              const hour = parseInt(e.target.value.split(':')[0]);
-                              if (!isNaN(hour)) {
-                                setIsDirty(true);
-                                setWorkingHours({ ...workingHours, start: hour });
-                              }
-                            }}
-                            className="w-full bg-[#171612] border border-[#514c3e] rounded-lg pl-10 pr-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                          />
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">End Hour</label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-500 text-sm">more_time</span>
-                          <input
-                            type="time"
-                            step="3600"
-                            value={`${workingHours.end.toString().padStart(2, '0')}:00`}
-                            onChange={(e) => {
-                              const hour = parseInt(e.target.value.split(':')[0]);
-                              if (!isNaN(hour)) {
-                                setIsDirty(true);
-                                setWorkingHours({ ...workingHours, end: hour });
-                              }
-                            }}
-                            className="w-full bg-[#171612] border border-[#514c3e] rounded-lg pl-10 pr-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
                     <div className="space-y-2">
                       <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Base Timezone</label>
                       <select
@@ -643,7 +598,6 @@ export default function AccountPage({ params }: AccountPageProps) {
                         <option value="Asia/Dubai">Asia/Dubai (GMT+4)</option>
                         <option value="Asia/Tokyo">Asia/Tokyo (GMT+9)</option>
                       </select>
-                      <p className="text-[10px] text-slate-500 italic mt-1">Times above will be interpreted in this timezone.</p>
                     </div>
                   </div>
                 </div>
@@ -849,32 +803,32 @@ export default function AccountPage({ params }: AccountPageProps) {
                     <h3 className="text-white text-lg font-bold">City Management</h3>
                   </div>
                   <p className="text-slate-400 text-xs mb-8">
-                    Block offers based on pickup and drop-off city. Empty lists mean no cities are blocked for that direction (all are allowed).
+                    Only accept offers from cities in the lists below. Empty lists mean all cities are accepted for that direction.
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-4">
-                      <label className="text-sm font-semibold text-rose-400 flex items-center gap-2">
+                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
                         <span className="material-symbols-outlined text-sm">verified</span>
-                        Blocked Pickup Cities
+                        Allowed Pickup Cities
                       </label>
                       <form onSubmit={(e) => { e.preventDefault(); addPickupCity(); }} className="flex gap-2">
                         <input
                           value={pickupCityInput}
                           onChange={(e) => setPickupCityInput(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-rose-500"
-                          placeholder="Enter pickup city (e.g. Orlando)" type="text"
+                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-emerald-500"
+                          placeholder="Enter allowed pickup city" type="text"
                         />
-                        <button type="submit" className="px-4 py-2 bg-rose-500/10 border border-rose-500/20 rounded-lg text-sm font-bold text-rose-400 hover:bg-rose-500/20">Add</button>
+                        <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
                       </form>
                       {allowedPickupCities.length === 0 ? (
                         <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No blocked pickup cities configured. All pickup cities are allowed.</p>
+                          <p className="text-xs text-slate-500 italic">No allowed pickup cities configured. All pickup cities are accepted.</p>
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {allowedPickupCities.map(city => (
-                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-rose-500/20 rounded-lg text-xs">
-                              <span className="text-rose-400 font-medium">{city}</span>
+                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
+                              <span className="text-emerald-400 font-medium">{city}</span>
                               <button onClick={() => removePickupCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
                             </div>
                           ))}
@@ -882,28 +836,28 @@ export default function AccountPage({ params }: AccountPageProps) {
                       )}
                     </div>
                     <div className="space-y-4">
-                      <label className="text-sm font-semibold text-rose-400 flex items-center gap-2">
+                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
                         <span className="material-symbols-outlined text-sm">verified</span>
-                        Blocked Dropoff Cities
+                        Allowed Dropoff Cities
                       </label>
                       <form onSubmit={(e) => { e.preventDefault(); addDropoffCity(); }} className="flex gap-2">
                         <input
                           value={dropoffCityInput}
                           onChange={(e) => setDropoffCityInput(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-rose-500"
-                          placeholder="Enter dropoff city (e.g. Orlando)" type="text"
+                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-emerald-500"
+                          placeholder="Enter allowed dropoff city" type="text"
                         />
-                        <button type="submit" className="px-4 py-2 bg-rose-500/10 border border-rose-500/20 rounded-lg text-sm font-bold text-rose-400 hover:bg-rose-500/20">Add</button>
+                        <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
                       </form>
                       {allowedDropoffCities.length === 0 ? (
                         <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No blocked dropoff cities configured. All dropoff cities are allowed.</p>
+                          <p className="text-xs text-slate-500 italic">No allowed dropoff cities configured. All dropoff cities are accepted.</p>
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {allowedDropoffCities.map(city => (
-                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-rose-500/20 rounded-lg text-xs">
-                              <span className="text-rose-400 font-medium">{city}</span>
+                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
+                              <span className="text-emerald-400 font-medium">{city}</span>
                               <button onClick={() => removeDropoffCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
                             </div>
                           ))}
@@ -983,29 +937,53 @@ export default function AccountPage({ params }: AccountPageProps) {
                           <span className="text-xs text-slate-400 uppercase tracking-wider">
                             Allowed Start (inclusive)
                           </span>
-                          <input
-                            type="datetime-local"
-                            value={allowedStartDate}
-                            onChange={(e) => {
-                              setIsDirty(true);
-                              setAllowedStartDate(e.target.value);
-                            }}
-                            className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                          />
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="datetime-local"
+                              value={allowedStartDate}
+                              onChange={(e) => {
+                                setIsDirty(true);
+                                setAllowedStartDate(e.target.value);
+                              }}
+                              className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                            />
+                            {allowedStartDate && (
+                              <button
+                                type="button"
+                                onClick={() => { setIsDirty(true); setAllowedStartDate(''); }}
+                                className="flex items-center justify-center size-8 rounded-lg border border-[#514c3e] text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition-colors"
+                                title="Clear"
+                              >
+                                <span className="material-symbols-outlined text-sm">close</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <div className="space-y-1">
                           <span className="text-xs text-slate-400 uppercase tracking-wider">
                             Allowed End (inclusive)
                           </span>
-                          <input
-                            type="datetime-local"
-                            value={allowedEndDate}
-                            onChange={(e) => {
-                              setIsDirty(true);
-                              setAllowedEndDate(e.target.value);
-                            }}
-                            className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                          />
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="datetime-local"
+                              value={allowedEndDate}
+                              onChange={(e) => {
+                                setIsDirty(true);
+                                setAllowedEndDate(e.target.value);
+                              }}
+                              className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
+                            />
+                            {allowedEndDate && (
+                              <button
+                                type="button"
+                                onClick={() => { setIsDirty(true); setAllowedEndDate(''); }}
+                                className="flex items-center justify-center size-8 rounded-lg border border-[#514c3e] text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition-colors"
+                                title="Clear"
+                              >
+                                <span className="material-symbols-outlined text-sm">close</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <p className="text-[10px] text-slate-500 italic">
                           If left empty, no static window restriction is applied on that side. Times

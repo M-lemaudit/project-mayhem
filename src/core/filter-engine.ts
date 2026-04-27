@@ -983,26 +983,26 @@ export class FilterEngine {
       typeof c === 'string' ? c.trim().toLowerCase() : ''
     ).filter(Boolean);
     if (allowedPickupCities.length > 0) {
-      const pickupBlocked = allowedPickupCities.includes(pickupCity);
+      const pickupAllowed = allowedPickupCities.includes(pickupCity);
       traceCompare({
         offerId,
-        filterName: 'blockedPickupCities',
-        op: 'not-in-blocklist',
+        filterName: 'allowedPickupCities',
+        op: 'in-allowlist',
         leftLabel: 'pickupCity',
         leftValue: pickupCity,
-        rightLabel: 'blockedPickupCities',
+        rightLabel: 'allowedPickupCities',
         rightValue: allowedPickupCities,
-        passed: !pickupBlocked,
+        passed: pickupAllowed,
       });
-      if (pickupBlocked) {
+      if (!pickupAllowed) {
         const res = fail(
-          'blockedPickupCities',
-          `Pickup city '${pickupCity || 'unknown'}' is blocked by pickup city filter`,
+          'allowedPickupCities',
+          `Pickup city '${pickupCity || 'unknown'}' is not in the allowed pickup cities`,
           {
-            op: 'in-blocklist',
+            op: 'not-in-allowlist',
             leftLabel: 'pickupCity',
             leftValue: pickupCity,
-            rightLabel: 'blockedPickupCities',
+            rightLabel: 'allowedPickupCities',
             rightValue: allowedPickupCities,
           }
         );
@@ -1014,26 +1014,26 @@ export class FilterEngine {
       typeof c === 'string' ? c.trim().toLowerCase() : ''
     ).filter(Boolean);
     if (allowedDropoffCities.length > 0) {
-      const dropoffBlocked = allowedDropoffCities.includes(dropoffCity);
+      const dropoffAllowed = allowedDropoffCities.includes(dropoffCity);
       traceCompare({
         offerId,
-        filterName: 'blockedDropoffCities',
-        op: 'not-in-blocklist',
+        filterName: 'allowedDropoffCities',
+        op: 'in-allowlist',
         leftLabel: 'dropoffCity',
         leftValue: dropoffCity,
-        rightLabel: 'blockedDropoffCities',
+        rightLabel: 'allowedDropoffCities',
         rightValue: allowedDropoffCities,
-        passed: !dropoffBlocked,
+        passed: dropoffAllowed,
       });
-      if (dropoffBlocked) {
+      if (!dropoffAllowed) {
         const res = fail(
-          'blockedDropoffCities',
-          `Dropoff city '${dropoffCity || 'unknown'}' is blocked by dropoff city filter`,
+          'allowedDropoffCities',
+          `Dropoff city '${dropoffCity || 'unknown'}' is not in the allowed dropoff cities`,
           {
-            op: 'in-blocklist',
+            op: 'not-in-allowlist',
             leftLabel: 'dropoffCity',
             leftValue: dropoffCity,
-            rightLabel: 'blockedDropoffCities',
+            rightLabel: 'allowedDropoffCities',
             rightValue: allowedDropoffCities,
           }
         );

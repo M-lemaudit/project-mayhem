@@ -50,7 +50,7 @@ export function EditClientDialog({
   const [email, setEmail] = useState(bot.email ?? '');
   const [password, setPassword] = useState('');
   const [minPrice, setMinPrice] = useState(
-    String(typeof filters.minPrice === 'number' ? filters.minPrice : 50)
+    String(typeof filters.minPrice === 'number' ? filters.minPrice : 40)
   );
   const [minHoursFromNow, setMinHoursFromNow] = useState(
     typeof filters.minHoursFromNow === 'number' ? String(filters.minHoursFromNow) : ''
@@ -78,7 +78,7 @@ export function EditClientDialog({
       setEmail(bot.email ?? '');
       setPassword('');
       const f = (bot.filters ?? {}) as Record<string, unknown>;
-      setMinPrice(String(typeof f.minPrice === 'number' ? f.minPrice : 50));
+      setMinPrice(String(typeof f.minPrice === 'number' ? f.minPrice : 40));
       setMinHoursFromNow(
         typeof f.minHoursFromNow === 'number' ? String(f.minHoursFromNow) : ''
       );

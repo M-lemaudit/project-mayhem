@@ -41,7 +41,7 @@ export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDial
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [minPrice, setMinPrice] = useState('50');
+  const [minPrice, setMinPrice] = useState('40');
   const [minHoursFromNow, setMinHoursFromNow] = useState('');
   const [vehicleTypes, setVehicleTypes] = useState<string[]>([]);
   const [timezone, setTimezone] = useState('America/New_York');
@@ -81,7 +81,7 @@ export function AddClientDialog({ open, onOpenChange, onSuccess }: AddClientDial
       setName('');
       setEmail('');
       setPassword('');
-      setMinPrice('50');
+      setMinPrice('40');
       setMinHoursFromNow('');
       setVehicleTypes([]);
       setTimezone('America/New_York');
