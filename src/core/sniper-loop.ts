@@ -558,8 +558,14 @@ export class SniperLoop {
                   await this.api.acceptOffer(offer);
                 } catch (acceptErr) {
                   // Keep bot alive on accept failures; notify webhook and continue loop.
-                  this.processedOfferIds.delete(idStr);
+                  // Only remove from processedOfferIds for transient errors (no status, 429, 5xx)
+                  // so the offer can be retried. For 404/410, do NOT retry — offer won't become
+                  // available and removing it causes an infinite accept loop.
                   const statusCode = extractHttpStatusCode(acceptErr);
+                  const isTransient = !statusCode || statusCode === 429 || statusCode >= 500;
+                  if (isTransient) {
+                    this.processedOfferIds.delete(idStr);
+                  }
                   const message =
                     acceptErr instanceof Error && acceptErr.message
                       ? acceptErr.message

@@ -328,6 +328,8 @@ export class BlacklaneApi {
   private absoluteClient: ScrapingClient | null = null;
   /** Blacklane internal user id used for authenticated actions on partner portal. */
   private readonly blacklaneUserId: string;
+  private readonly bdId?: string;
+  private readonly lspId?: string;
   private readonly label: string;
   private readonly userAgent: string;
   private baseProxyUrl: string;
@@ -340,13 +342,17 @@ export class BlacklaneApi {
     accessToken: string,
     cookies: AuthCookie[],
     userAgent: string,
-    blacklaneUserId: string
+    blacklaneUserId: string,
+    bdId?: string,
+    lspId?: string
   ) {
     if (!BASE_URL) {
       throw new Error('BLACKLANE_API_URL must be set');
     }
     this.label = label;
     this.blacklaneUserId = blacklaneUserId;
+    this.bdId = bdId;
+    this.lspId = lspId;
     this.userAgent = userAgent;
     this.accessToken = accessToken;
     this.cookies = cookies;
@@ -682,7 +688,6 @@ export class BlacklaneApi {
   async acceptOffer(
     offer: any
   ): Promise<{ status: string; offer_id?: string } | Record<string, unknown>> {
-    const partnerUrl = 'https://partner-portal-api.blacklane.com/chauffeur/offers';
     const priceFromFilter = getOfferPrice(offer);
     const cleanPrice =
       typeof priceFromFilter === 'number' && Number.isFinite(priceFromFilter) ? priceFromFilter : 0;
@@ -690,35 +695,44 @@ export class BlacklaneApi {
     if (!offerId) {
       throw new Error('Cannot accept offer: missing offer.id');
     }
+
+    const acceptUrl = `https://partner-portal-api.blacklane.com/api/v1/chauffeur/offers/${offerId}/acceptance`;
+
+    const attrs = offer?.attributes as Record<string, unknown> | undefined;
+    const currency = typeof attrs?.currency === 'string' ? attrs.currency : 'EUR';
+    const bookingType = typeof attrs?.booking_type === 'string' ? attrs.booking_type : 'prebooked';
+    const priceMinorUnit = Math.round(cleanPrice * 100);
+
     const payload = {
-      action: 'accept',
-      id: offerId,
+      currency,
       price: cleanPrice,
+      price_minor_unit: priceMinorUnit,
+      type: bookingType,
     };
 
-    const headers = {
+    const headers: Record<string, string> = {
       accept: '*/*',
-      'blacklane-user-id': this.blacklaneUserId,
-      'blacklane-user-roles': 'dispatcher,driver,provider',
+      'x-user-id': this.blacklaneUserId,
+      'x-user-roles': 'dispatcher,driver,provider',
       'content-type': 'application/json',
-      'user-agent': this.userAgent,
       'x-user-agent': this.userAgent,
     };
+    if (this.bdId) headers['x-user-bd-id'] = this.bdId;
+    if (this.lspId) headers['x-user-lsp-id'] = this.lspId;
 
     const isProduction = isEnvFlagEnabled(process.env.IS_PRODUCTION);
     if (!isProduction) {
-      // Safety kill-switch: never hit the real endpoint outside production.
       logger.info(
-        `[SIMULATION] Would send POST to ${partnerUrl} with Payload: ${JSON.stringify(
+        `[SIMULATION] Would send POST to ${acceptUrl} with Payload: ${JSON.stringify(
           payload
-        )} (cleanPrice: ${cleanPrice}) and Headers: ${JSON.stringify(headers)}`
+        )} and Headers: ${JSON.stringify(headers)}`
       );
-      return { status: 'simulation_success', offer_id: payload.id as string | undefined };
+      return { status: 'simulation_success', offer_id: offerId };
     }
 
     if (ACCEPT_DEBUG) {
       logger.info(`[ACCEPT_DEBUG] Sending accept request for ${this.label}`, {
-        endpoint: partnerUrl,
+        endpoint: acceptUrl,
         payload,
         headers,
       });
@@ -726,56 +740,27 @@ export class BlacklaneApi {
 
     try {
       const client = await this.getAbsoluteClient();
-      const response = await client.post<unknown>(partnerUrl, { json: payload, headers });
+      await client.post<unknown>(acceptUrl, { json: payload, headers });
       logger.info(
-        `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} — POST to ${partnerUrl} succeeded.`
+        `[PRODUCTION] Offer booked: id=${offerId} price=${cleanPrice} — POST to ${acceptUrl} succeeded.`
       );
-      return response.body as { status: string; offer_id?: string } | Record<string, unknown>;
+      return { status: 'accepted', offer_id: offerId };
     } catch (error) {
       const status = this.getHttpStatus(error);
       const parsedBody = this.parseErrorBody(error);
       const code = parsedBody?.code;
-      logger.warn(`[ACCEPT_DEBUG] Partner accept failed for ${this.label}`, {
-        endpoint: partnerUrl,
+      logger.warn(`[ACCEPT_DEBUG] Accept failed for ${this.label}`, {
+        endpoint: acceptUrl,
         payload,
-        headers,
         statusCode: status,
         parsedBody,
         ...this.getErrorDebugSnapshot(error),
       });
       if (status === 410 && code === 'invalid_state') {
         logger.info(
-          `[PRODUCTION] Offer ${payload.id} could not be accepted: invalid state (410). Probably already taken or no longer available.`
+          `[PRODUCTION] Offer ${offerId} could not be accepted: invalid state (410). Probably already taken or no longer available.`
         );
         throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
-      }
-      if (status === 404) {
-        const hadesPath = `hades/offers/${offerId}/accept`;
-        try {
-          const client = await this.getClient();
-          if (ACCEPT_DEBUG) {
-            logger.info(`[ACCEPT_DEBUG] Retrying on hades accept endpoint for ${this.label}`, {
-              endpoint: hadesPath,
-              payload,
-            });
-          }
-          const retry = await client.post<unknown>(hadesPath, { json: payload });
-          logger.info(
-            `[PRODUCTION] Offer booked: id=${payload.id} price=${cleanPrice} - POST to ${hadesPath} succeeded (fallback).`
-          );
-          return retry.body as { status: string; offer_id?: string } | Record<string, unknown>;
-        } catch (fallbackError) {
-          const fallbackStatus = this.getHttpStatus(fallbackError);
-          const fallbackBody = this.parseErrorBody(fallbackError);
-          logger.warn(`[ACCEPT_DEBUG] Hades fallback accept failed for ${this.label}`, {
-            endpoint: hadesPath,
-            payload,
-            statusCode: fallbackStatus,
-            parsedBody: fallbackBody,
-            ...this.getErrorDebugSnapshot(fallbackError),
-          });
-          throw this.normalizeRequestError(fallbackError);
-        }
       }
       throw this.normalizeRequestError(error);
     }

@@ -5,7 +5,7 @@
  */
 
 import 'dotenv/config';
-import { AuthError, loginAndGetToken, discoverBlacklaneUserId } from './core/auth';
+import { AuthError, loginAndGetToken, discoverUserProfile } from './core/auth';
 import { ReauthRequiredError, SniperLoop, type BotFilters } from './core';
 import { BlacklaneApi, BotStateService, RideSyncService } from './services';
 import { extractHttpStatusCode, isLikelyDatabaseDown, logger, toErrorDetails, triggerAuthErrorWebhook } from './utils';
@@ -135,18 +135,23 @@ async function runBotInstance(
         });
 
         let blacklaneUserId = bot.blacklane_user_id;
+        let bdId: string | undefined;
+        let lspId: string | undefined;
 
-        if (!blacklaneUserId) {
-          const discoveredId = await discoverBlacklaneUserId(session.accessToken);
-          if (discoveredId) {
-            blacklaneUserId = discoveredId;
-            logger.info(`[AUTH] Auto-discovered Blacklane User ID: ${discoveredId}`);
+        const profile = await discoverUserProfile(session.accessToken);
+        if (profile) {
+          if (!blacklaneUserId) {
+            blacklaneUserId = profile.userId;
+            logger.info(`[AUTH] Auto-discovered Blacklane User ID: ${profile.userId}`);
             const supabase = getSupabase();
             await supabase
               .from('bots')
-              .update({ blacklane_user_id: discoveredId })
+              .update({ blacklane_user_id: profile.userId })
               .eq('id', bot.id);
           }
+          bdId = profile.bdId;
+          lspId = profile.lspId;
+          logger.info(`[AUTH] User profile discovered`, { bdId, lspId });
         }
 
         if (!blacklaneUserId) {
@@ -158,7 +163,9 @@ async function runBotInstance(
           session.accessToken,
           session.cookies,
           session.userAgent,
-          blacklaneUserId
+          blacklaneUserId,
+          bdId,
+          lspId
         );
         const rawFilters = await botState.getFilters();
         const filters: BotFilters = {

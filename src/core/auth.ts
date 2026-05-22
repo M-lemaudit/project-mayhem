@@ -460,13 +460,19 @@ export async function loginAndGetToken(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+export interface UserProfile {
+  userId: string;
+  bdId?: string;
+  lspId?: string;
+}
+
 /**
- * Automatically fetch the Blacklane User ID using the acquired session token.
- * This calls the partner portal /me endpoint and extracts the root-level `id`.
+ * Fetch user profile from /me endpoint to get userId, bdId, and lspId.
+ * All three are needed as headers for the accept offer endpoint.
  */
-export async function discoverBlacklaneUserId(
+export async function discoverUserProfile(
   accessToken: string
-): Promise<string | undefined> {
+): Promise<UserProfile | undefined> {
   try {
     const response = await fetch('https://partner-portal-api.blacklane.com/me', {
       headers: {
@@ -475,25 +481,48 @@ export async function discoverBlacklaneUserId(
       },
     });
     if (!response.ok) {
-      logger.warn('[AUTH] User ID auto-discovery request failed', {
+      logger.warn('[AUTH] User profile discovery request failed', {
         status: response.status,
         statusText: response.statusText,
       });
       return undefined;
     }
-    const data = await response.json() as { id?: unknown };
-    const id = data?.id;
-    if (typeof id === 'string' && id.trim().length > 0) {
-      return id;
+    const data = await response.json() as Record<string, unknown>;
+    logger.info('[AUTH] /me raw response keys', { keys: Object.keys(data) });
+
+    const rawId = data.id;
+    let userId = '';
+    if (typeof rawId === 'string' && rawId.trim().length > 0) {
+      userId = rawId.trim();
+    } else if (typeof rawId === 'number' && Number.isFinite(rawId)) {
+      userId = String(rawId);
     }
-    if (typeof id === 'number' && Number.isFinite(id)) {
-      return String(id);
-    }
+    if (!userId) return undefined;
+
+    const bdId = pickStringField(data, ['bd_id', 'bdId', 'business_driver_id']);
+    const lspId = pickStringField(data, ['lsp_id', 'lspId', 'local_service_provider_id']);
+
+    return { userId, bdId, lspId };
   } catch (err) {
-    logger.warn('[AUTH] Error during auto-discovery of User ID', {
+    logger.warn('[AUTH] Error during user profile discovery', {
       error: err instanceof Error ? err.message : String(err),
     });
     return undefined;
   }
+}
+
+function pickStringField(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const val = obj[key];
+    if (typeof val === 'string' && val.trim().length > 0) return val.trim();
+  }
   return undefined;
+}
+
+/** @deprecated Use discoverUserProfile instead. */
+export async function discoverBlacklaneUserId(
+  accessToken: string
+): Promise<string | undefined> {
+  const profile = await discoverUserProfile(accessToken);
+  return profile?.userId;
 }
