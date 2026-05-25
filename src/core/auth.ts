@@ -488,7 +488,6 @@ export async function discoverUserProfile(
       return undefined;
     }
     const data = await response.json() as Record<string, unknown>;
-    logger.info('[AUTH] /me raw response keys', { keys: Object.keys(data) });
 
     const rawId = data.id;
     let userId = '';
@@ -499,8 +498,13 @@ export async function discoverUserProfile(
     }
     if (!userId) return undefined;
 
-    const bdId = pickStringField(data, ['bd_id', 'bdId', 'business_driver_id']);
-    const lspId = pickStringField(data, ['lsp_id', 'lspId', 'local_service_provider_id']);
+    // /me nests provider IDs under `lsp`:
+    //   lsp.id                     -> x-user-lsp-id
+    //   lsp.businessDistrict.uuid  -> x-user-bd-id
+    const lsp = data.lsp as Record<string, unknown> | undefined;
+    const lspId = asNonEmptyString(lsp?.id);
+    const businessDistrict = lsp?.businessDistrict as Record<string, unknown> | undefined;
+    const bdId = asNonEmptyString(businessDistrict?.uuid);
 
     return { userId, bdId, lspId };
   } catch (err) {
@@ -511,12 +515,8 @@ export async function discoverUserProfile(
   }
 }
 
-function pickStringField(obj: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const val = obj[key];
-    if (typeof val === 'string' && val.trim().length > 0) return val.trim();
-  }
-  return undefined;
+function asNonEmptyString(val: unknown): string | undefined {
+  return typeof val === 'string' && val.trim().length > 0 ? val.trim() : undefined;
 }
 
 /** @deprecated Use discoverUserProfile instead. */
