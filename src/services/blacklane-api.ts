@@ -121,11 +121,12 @@ function buildDefaultHeaders(): Record<string, string> {
 }
 
 
-/** Query params for GET /hades/offers (successful manual request). */
+const OFFERS_URL = 'https://partner-portal-api.blacklane.com/api/v1/chauffeur/offers';
+
+/** Query params for GET /api/v1/chauffeur/offers */
 const OFFERS_PARAMS = {
-  'page[number]': 1,
-  'page[size]': 30,
-  include: 'pickup_location,dropoff_location',
+  sort_by: 'start_time',
+  order_by: 'asc',
 };
 
 /** Query params for GET /hades/bookings (upcoming / My Rides). */
@@ -562,17 +563,24 @@ export class BlacklaneApi {
     return error instanceof Error ? error : new Error(String(error));
   }
 
-  /** GET /hades/offers with page and include params. Returns the response data. */
+  /** GET /api/v1/chauffeur/offers — partner-portal-api endpoint. Returns the response data. */
   async getOffers(): Promise<unknown> {
+    const headers: Record<string, string> = {
+      accept: '*/*',
+      'x-user-id': this.blacklaneUserId,
+      'x-user-roles': 'dispatcher,driver,on_demand,provider',
+    };
+    if (this.bdId) headers['x-user-bd-id'] = this.bdId;
+    if (this.lspId) headers['x-user-lsp-id'] = this.lspId;
+
     let lastError: unknown;
     for (let attempt = 1; attempt <= OFFERS_PROXY_RETRY_ATTEMPTS; attempt += 1) {
       try {
-        const { gotScraping } = await import('got-scraping');
-        const client =
-          this.client ??
-          this.createGotClient(gotScraping as unknown as GotScrapingFactory);
-        this.client = client;
-        const response = await client.get<unknown>('hades/offers', { searchParams: OFFERS_PARAMS });
+        const client = await this.getAbsoluteClient();
+        const response = await client.get<unknown>(OFFERS_URL, {
+          searchParams: OFFERS_PARAMS,
+          headers,
+        });
         return response.body;
       } catch (error) {
         const normalizedError = this.normalizeRequestError(error);
