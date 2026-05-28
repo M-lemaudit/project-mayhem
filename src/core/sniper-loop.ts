@@ -28,7 +28,7 @@ const COFFEE_BREAK_MAX_MS = 5 * 60 * 1000; // 5 minutes
 const PROCESSED_OFFER_IDS_MAX = 500;
 const MATCH_COOLDOWN_MIN_MS = 5 * 1000; // 5 seconds
 const MATCH_COOLDOWN_MAX_MS = 10 * 1000; // 10 seconds
-const MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH = 2;
+const MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH = 5;
 const STANDBY_POLL_MS = 30_000;
 
 function getTodayIsoDateInTimezone(timezoneId?: string): string {
@@ -810,7 +810,9 @@ export class SniperLoop {
             });
 
             if (this.consecutiveUnknownErrors < MAX_UNKNOWN_ERRORS_BEFORE_ERROR_AUTH) {
-              logger.warn(`${this.logPrefix} Will retry unknown cycle error before marking ERROR_AUTH.`);
+              const backoffMs = exponentialBackoffWithJitterMs(this.consecutiveUnknownErrors);
+              logger.warn(`${this.logPrefix} Will retry unknown cycle error before marking ERROR_AUTH (backoff ${backoffMs}ms).`);
+              await sleep(backoffMs);
               continue;
             }
 
