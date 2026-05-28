@@ -129,6 +129,117 @@ const OFFERS_PARAMS = {
   order_by: 'asc',
 };
 
+// ── New API response normalization ────────────────────────────────────────────
+
+interface NewApiLocation {
+  name?: string;
+  address?: string;
+  airportCode?: string;
+  longitude?: number;
+  latitude?: number;
+}
+
+interface NewApiRide {
+  type?: string;
+  pickupTime?: string;
+  flightNumber?: string;
+  pickUpLocation?: NewApiLocation;
+  dropOffLocation?: NewApiLocation;
+  estimatedDurationMinutes?: number;
+}
+
+interface NewApiOffer {
+  id?: string;
+  type?: string;
+  price?: number;
+  price_minor_unit?: number;
+  currency?: string;
+  vehicleClass?: string;
+  rides?: NewApiRide[];
+}
+
+interface NewApiResponse {
+  items?: NewApiOffer[];
+}
+
+function extractCityFromAddress(loc: NewApiLocation): string {
+  // Address format: "Hotel Name, Street 123, 33480 Palm Beach, Florida"
+  // Try to capture the word(s) after the zip code
+  const address = loc.address ?? '';
+  const zipMatch = address.match(/\d{4,5}\s+([^,]+)/);
+  if (zipMatch) return zipMatch[1].trim();
+  return loc.name ?? '';
+}
+
+/**
+ * Converts the new /api/v1/chauffeur/offers response into the JSON:API-compatible
+ * shape that FilterEngine expects: { data: OfferShape[], included: LocationResource[] }.
+ */
+function normalizeNewApiResponse(raw: unknown): { data: unknown[]; included: unknown[] } {
+  const response = raw as NewApiResponse | null;
+  if (!response?.items || !Array.isArray(response.items)) {
+    return { data: [], included: [] };
+  }
+
+  const data: unknown[] = [];
+  const included: unknown[] = [];
+
+  for (const item of response.items) {
+    if (!item?.id) continue;
+    const ride = item.rides?.[0];
+
+    const pickupId = `${item.id}_pickup`;
+    const dropoffId = `${item.id}_dropoff`;
+
+    if (ride?.pickUpLocation) {
+      included.push({
+        id: pickupId,
+        type: 'location',
+        attributes: {
+          airport_iata: ride.pickUpLocation.airportCode ?? null,
+          formatted_address_en: ride.pickUpLocation.address ?? ride.pickUpLocation.name ?? '',
+          city: extractCityFromAddress(ride.pickUpLocation),
+        },
+      });
+    }
+
+    if (ride?.dropOffLocation) {
+      included.push({
+        id: dropoffId,
+        type: 'location',
+        attributes: {
+          airport_iata: (ride.dropOffLocation as NewApiLocation & { airportCode?: string }).airportCode ?? null,
+          formatted_address_en: ride.dropOffLocation.address ?? ride.dropOffLocation.name ?? '',
+          city: extractCityFromAddress(ride.dropOffLocation),
+        },
+      });
+    }
+
+    data.push({
+      id: item.id,
+      type: item.type ?? 'ride',
+      price: item.price,
+      vehicle_type: item.vehicleClass,
+      attributes: {
+        price: item.price,
+        currency: item.currency,
+        service_class: item.vehicleClass,
+        booking_type: ride?.type,
+        pickup_at: ride?.pickupTime,
+        starts_at: ride?.pickupTime,
+        flight_number: ride?.flightNumber,
+        duration: ride?.estimatedDurationMinutes,
+      },
+      relationships: {
+        pickup_location: { data: { id: pickupId } },
+        dropoff_location: { data: { id: dropoffId } },
+      },
+    });
+  }
+
+  return { data, included };
+}
+
 /** Query params for GET /hades/bookings (upcoming / My Rides). */
 const UPCOMING_BOOKINGS_PARAMS = {
   scope: 'future',
@@ -581,7 +692,7 @@ export class BlacklaneApi {
           searchParams: OFFERS_PARAMS,
           headers,
         });
-        return response.body;
+        return normalizeNewApiResponse(response.body);
       } catch (error) {
         const normalizedError = this.normalizeRequestError(error);
         lastError = normalizedError;
