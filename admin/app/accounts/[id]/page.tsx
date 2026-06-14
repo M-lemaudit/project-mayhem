@@ -75,10 +75,21 @@ export default function AccountPage({ params }: AccountPageProps) {
 
   useEffect(() => {
     async function fetchBot() {
+      // Data isolation: only load this bot if it belongs to the signed-in user.
+      // Without the user_id guard, anyone could open another account's bot by
+      // guessing its id in the URL.
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        router.push('/login');
+        return;
+      }
       const { data, error } = await supabase
         .from('bots')
         .select('*')
         .eq('id', id)
+        .eq('user_id', user.id)
         .single();
 
       if (error || !data) {
@@ -218,13 +229,22 @@ export default function AccountPage({ params }: AccountPageProps) {
       allowedDropoffCities,
     };
 
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      router.push('/login');
+      return;
+    }
     const { error } = await supabase
       .from('bots')
       .update({
         filters: updatedFilters,
         timezone: timezone,
       })
-      .eq('id', id);
+      .eq('id', id)
+      // Data isolation: never let a save touch a bot the user doesn't own.
+      .eq('user_id', user.id);
 
     if (error) {
       console.error('Failed to save filters', {

@@ -78,9 +78,20 @@ export default function DashboardPage() {
   const [botToDelete, setBotToDelete] = useState<NetworkAccount | null>(null);
 
   const fetchBots = async () => {
+    // Data isolation: only ever load the bots owned by the signed-in user.
+    // RLS is currently permissive, so this client-side scope is what prevents
+    // one account from seeing another account's bots in the dashboard.
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      router.push('/login');
+      return;
+    }
     const { data, error } = await supabase
       .from('bots')
       .select('*')
+      .eq('user_id', user.id)
       .order('created_at', { ascending: false });
     if (error) {
       console.error('Failed to fetch bots', {

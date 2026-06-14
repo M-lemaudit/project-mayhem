@@ -49,20 +49,37 @@ export function LiveSnipeLog({ mode, botId, botsById }: LiveSnipeLogProps) {
   const title = mode === 'global' ? 'Live Snipe Log' : 'Recent Activity';
   const filteredBotsById = botsById ?? {};
 
+  // Data isolation: the log must only ever show offers for bots the current
+  // viewer owns. In bot mode that's the single bot; in global mode it's the
+  // user-scoped bots passed down by the dashboard (botsById). We never query
+  // the table unscoped, so one account can't see another account's snipes.
+  const allowedBotIds =
+    mode === 'bot' ? (botId ? [botId] : []) : Object.keys(filteredBotsById);
+  // Stable primitive dependency for the effect (sorted to ignore key order).
+  const allowedKey = allowedBotIds.slice().sort().join(',');
+
   useEffect(() => {
     let isMounted = true;
+    const allowedSet = new Set(allowedKey ? allowedKey.split(',') : []);
 
     async function fetchLogs() {
       setLoading(true);
-      let query = supabase
+      // No allowed bots (e.g. dashboard still loading or user has no bots):
+      // render empty rather than querying the whole table.
+      if (allowedSet.size === 0) {
+        if (isMounted) {
+          setLogs([]);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const query = supabase
         .from('accepted_offers')
         .select('id, bot_id, offer_id, price, pickup_at, pickup_address, dropoff_address, created_at')
         .order('created_at', { ascending: false })
-        .limit(500);
-
-      if (mode === 'bot' && botId) {
-        query = query.eq('bot_id', botId);
-      }
+        .limit(500)
+        .in('bot_id', Array.from(allowedSet));
 
       const { data, error } = await query;
       if (!isMounted) return;
@@ -89,7 +106,8 @@ export function LiveSnipeLog({ mode, botId, botsById }: LiveSnipeLogProps) {
           if (!isMounted) return;
           const row = payload.new;
           if (!row) return;
-          if (mode === 'bot' && botId && row.bot_id !== botId) return;
+          // Drop realtime events for any bot the viewer doesn't own.
+          if (!allowedSet.has(row.bot_id)) return;
           setLogs((prev) => {
             const existingIdx = prev.findIndex((r) => r.id === row.id);
             const next = existingIdx >= 0 ? [...prev] : [row, ...prev];
@@ -106,7 +124,7 @@ export function LiveSnipeLog({ mode, botId, botsById }: LiveSnipeLogProps) {
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [mode, botId]);
+  }, [mode, botId, allowedKey]);
 
   const totalPages = Math.max(1, Math.ceil(logs.length / EXPANDED_PAGE_SIZE));
   const currentPage = Math.min(page, totalPages - 1);
