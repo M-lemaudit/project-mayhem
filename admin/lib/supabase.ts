@@ -58,4 +58,15 @@ export interface AcceptedOfferRow {
   pickup_address?: string | null;
   dropoff_address?: string | null;
   created_at: string;
+  // Billing reconciliation: set once matched to a /hades/finished_rides entry.
+  completed_status?: string | null; // 'finished' | 'no_show'
+  finished_ride_uuid?: string | null;
+  booking_number?: string | null;
+  finished_price?: number | null; // authoritative billing base
+  finished_currency?: string | null;
+  completed_at?: string | null;
+  reconciled_at?: string | null;
 }
+
+/** Fraction of the completed-ride price billed to the user. */
+export const BILLING_FEE_RATE = 0.03;

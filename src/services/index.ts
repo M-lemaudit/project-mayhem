@@ -10,6 +10,7 @@ export {
   InvalidOfferStateError,
   type UpcomingBooking,
   type PlannedRide,
+  type FinishedRide,
 } from './blacklane-api';
 export {
   BotStateService,
@@ -18,3 +19,4 @@ export {
   type BotStatus,
 } from './bot-state';
 export { RideSyncService } from './ride-sync';
+export { BillingReconciler } from './billing-reconciler';

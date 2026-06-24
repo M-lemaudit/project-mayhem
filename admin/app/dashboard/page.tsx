@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase, type BotRow } from '@/lib/supabase';
+import { supabase, BILLING_FEE_RATE, type BotRow, type AcceptedOfferRow } from '@/lib/supabase';
 import { addClient, deleteClient } from '@/app/actions/bots';
 import { LiveSnipeLog } from '@/components/live-snipe-log';
 import { ComingSoonCard } from '@/components/coming-soon-card';
@@ -25,7 +25,7 @@ interface NetworkAccount {
   revenueLabel: string;
 }
 
-function mapBotToAccount(bot: BotRow): NetworkAccount {
+function mapBotToAccount(bot: BotRow, revenueLabel: string): NetworkAccount {
   const name = bot.name || bot.email;
   const emailDomain = bot.email.split('@')[1] ?? '';
   const domain = emailDomain.toLowerCase();
@@ -60,13 +60,45 @@ function mapBotToAccount(bot: BotRow): NetworkAccount {
     statusLabel,
     title: name,
     subtitle: 'Premium fleet account',
-    revenueLabel: '—',
+    revenueLabel,
   };
+}
+
+/** Current-month 3% fee per bot, formatted (or '—' when nothing reconciled yet). */
+function computeRevenueByBot(offers: AcceptedOfferRow[]): Record<string, string> {
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const monthStartMs = monthStart.getTime();
+
+  const agg = new Map<string, { fee: number; currency: string }>();
+  for (const o of offers) {
+    if (!o.completed_at || !o.reconciled_at) continue;
+    if (new Date(o.completed_at).getTime() < monthStartMs) continue;
+    const price = o.finished_price ?? 0;
+    const cur = agg.get(o.bot_id) ?? { fee: 0, currency: o.finished_currency || 'USD' };
+    cur.fee += price * BILLING_FEE_RATE;
+    agg.set(o.bot_id, cur);
+  }
+
+  const out: Record<string, string> = {};
+  for (const [botId, v] of Array.from(agg.entries())) {
+    try {
+      out[botId] = new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: v.currency,
+      }).format(v.fee);
+    } catch {
+      out[botId] = `${v.fee.toFixed(2)} ${v.currency}`;
+    }
+  }
+  return out;
 }
 
 export default function DashboardPage() {
   const router = useRouter();
   const [bots, setBots] = useState<BotRow[]>([]);
+  const [revenueByBot, setRevenueByBot] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
   // Add Account Modal states
@@ -100,7 +132,25 @@ export default function DashboardPage() {
       });
       return;
     }
-    setBots((data as BotRow[]) ?? []);
+    const botList = (data as BotRow[]) ?? [];
+    setBots(botList);
+
+    // Current-month billing per bot for the "Current Revenue" card.
+    if (botList.length > 0) {
+      const { data: offers, error: offerErr } = await supabase
+        .from('accepted_offers')
+        .select('bot_id, finished_price, finished_currency, completed_at, reconciled_at')
+        .in(
+          'bot_id',
+          botList.map((b) => b.id)
+        )
+        .not('reconciled_at', 'is', null);
+      if (offerErr) {
+        console.error('Failed to fetch billing', { errorMessage: offerErr.message });
+      } else {
+        setRevenueByBot(computeRevenueByBot((offers as AcceptedOfferRow[]) ?? []));
+      }
+    }
   };
 
   useEffect(() => {
@@ -179,7 +229,9 @@ export default function DashboardPage() {
   };
 
   const activeBots = bots.filter((b) => b.status === 'RUNNING').length;
-  const accounts: NetworkAccount[] = bots.map(mapBotToAccount);
+  const accounts: NetworkAccount[] = bots.map((bot) =>
+    mapBotToAccount(bot, revenueByBot[bot.id] ?? '—')
+  );
   const botsById = useMemo(
     () =>
       bots.reduce<Record<string, BotRow>>((acc, bot) => {
@@ -221,10 +273,11 @@ export default function DashboardPage() {
             </div>
             <div className="flex items-center gap-4">
               <button
-                className="w-10 h-10 flex items-center justify-center rounded-lg border border-[#262626] bg-[#141414] text-slate-600 cursor-not-allowed opacity-60"
-                disabled
+                className="px-4 py-2 rounded-lg border border-[#262626] bg-[#141414] text-xs font-semibold text-slate-300 hover:bg-[#262626] hover:text-[#d4af35] transition-colors flex items-center gap-2"
+                onClick={() => router.push('/billing')}
               >
-                <span className="material-symbols-outlined">notifications</span>
+                <span className="material-symbols-outlined text-base">receipt_long</span>
+                Billing
               </button>
               <button
                 className="px-4 py-2 rounded-lg border border-[#262626] bg-[#141414] text-xs font-semibold text-slate-300 hover:bg-[#262626] hover:text-[#d4af35] transition-colors"

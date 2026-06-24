@@ -260,12 +260,43 @@ const MAX_PLANNED_RIDES_PAGES = Number(process.env.BLACKLANE_MAX_PLANNED_RIDES_P
 const ATHENA_HADES_RIDES_URL = 'https://athena.blacklane.com/hades/rides';
 const PARTNER_HADES_RIDES_URL = 'https://partner-portal-api.blacklane.com/hades/rides';
 
+/** Query params for GET /hades/finished_rides (billing reconciliation source of truth). */
+const FINISHED_RIDES_PARAMS = {
+  'page[number]': 1,
+  'page[size]': 30,
+  include:
+    'pickup_location,dropoff_location,assigned_driver,assigned_vehicle,review,accepted_by,status_updates',
+  // no_show still pays the driver, so it counts as a completed (billable) ride.
+  'filter[status]': 'finished,no_show',
+};
+
+const MAX_FINISHED_RIDES_PAGES = Number(process.env.BLACKLANE_MAX_FINISHED_RIDES_PAGES) || 50;
+const ATHENA_HADES_FINISHED_RIDES_URL = 'https://athena.blacklane.com/hades/finished_rides';
+const PARTNER_HADES_FINISHED_RIDES_URL =
+  'https://partner-portal-api.blacklane.com/hades/finished_rides';
+
 /** Planned ride returned by getPlannedRides() (times as Date). */
 export interface PlannedRide {
   id: string;
   start_at: Date;
   end_at: Date;
   status: string;
+}
+
+/**
+ * A completed ride from GET /hades/finished_rides. Used by billing reconciliation to
+ * determine which bot-booked offers were actually driven (status finished | no_show).
+ */
+export interface FinishedRide {
+  rideUuid: string; // data[].id (athena ride uuid — distinct from the partner-portal offer id)
+  bookingNumber: string; // attributes.booking_number
+  legacyId: number | null; // attributes.legacy_id
+  status: string; // 'finished' | 'no_show'
+  price: number; // attributes.price (string in payload) — authoritative billing base
+  currency: string; // attributes.currency
+  startsAt: Date; // attributes.starts_at (offset-aware ISO)
+  acceptedAt: Date | null; // attributes.accepted_at
+  passengerName: string; // display only
 }
 
 /** Clean shape for an upcoming booking returned by getUpcomingBookings(). */
@@ -420,6 +451,55 @@ function mapPlannedRidesResponse(data: unknown): PlannedRide[] {
           start_at: startAt,
           end_at: endAt,
           status,
+        });
+      } catch {
+        continue;
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Parse JSON:API response for GET /hades/finished_rides. Returns FinishedRide[].
+ * Skips rows missing an id or a parseable starts_at (can't be reconciled without a pickup instant).
+ */
+function mapFinishedRidesResponse(data: unknown): FinishedRide[] {
+  try {
+    const raw = data as Record<string, unknown> | null;
+    if (!raw || typeof raw !== 'object') return [];
+    const list = Array.isArray(raw.data) ? raw.data : [];
+    const out: FinishedRide[] = [];
+    for (const item of list) {
+      try {
+        const res = item as { id?: string; attributes?: Record<string, unknown> };
+        if (!res || typeof res.id !== 'string') continue;
+        const attrs = res.attributes ?? {};
+        const startsAt = parseToDate(attrs.starts_at);
+        if (!startsAt) continue;
+        const priceRaw = attrs.price;
+        const price =
+          typeof priceRaw === 'number'
+            ? priceRaw
+            : typeof priceRaw === 'string'
+              ? Number(priceRaw)
+              : NaN;
+        const first =
+          typeof attrs.passenger_first_name === 'string' ? attrs.passenger_first_name : '';
+        const last = typeof attrs.passenger_last_name === 'string' ? attrs.passenger_last_name : '';
+        out.push({
+          rideUuid: res.id,
+          bookingNumber:
+            typeof attrs.booking_number === 'string' ? attrs.booking_number : String(attrs.booking_number ?? ''),
+          legacyId: typeof attrs.legacy_id === 'number' ? attrs.legacy_id : null,
+          status: typeof attrs.status === 'string' ? attrs.status : 'unknown',
+          price: Number.isFinite(price) ? price : 0,
+          currency: typeof attrs.currency === 'string' ? attrs.currency : '',
+          startsAt,
+          acceptedAt: parseToDate(attrs.accepted_at),
+          passengerName: `${first} ${last}`.trim(),
         });
       } catch {
         continue;
@@ -796,6 +876,75 @@ export class BlacklaneApi {
     }
 
     return allRides;
+  }
+
+  /**
+   * GET /hades/finished_rides (filter[status]=finished,no_show) — completed rides, newest first.
+   * Pages through results, stopping early once a page's oldest ride predates `stopBeforeMs`
+   * (the rolling-window cutoff from the reconciler) so we never page the entire history.
+   */
+  async getFinishedRides(stopBeforeMs?: number): Promise<FinishedRide[]> {
+    const allRides: FinishedRide[] = [];
+    const client = await this.getClient();
+    const targets = Array.from(
+      new Set<string>([
+        'hades/finished_rides',
+        ATHENA_HADES_FINISHED_RIDES_URL,
+        PARTNER_HADES_FINISHED_RIDES_URL,
+      ])
+    );
+
+    // First page: pick the reachable endpoint (some accounts 404 on the relative path).
+    let selectedTarget: string | null = null;
+    for (const target of targets) {
+      try {
+        const response = await client.get<unknown>(target, { searchParams: FINISHED_RIDES_PARAMS });
+        const pageRides = mapFinishedRidesResponse(response.body as Record<string, unknown>);
+        allRides.push(...pageRides);
+        selectedTarget = target;
+        if (this.reachedWindowEnd(pageRides, stopBeforeMs)) return allRides;
+        break;
+      } catch (firstErr) {
+        const status = this.getHttpStatus(firstErr);
+        const canFallback = status === 404 && target !== targets[targets.length - 1];
+        logger.warn(`[NETWORK] getFinishedRides first page attempt failed for ${this.label}`, {
+          target,
+          statusCode: status,
+          canFallback,
+        });
+        if (!canFallback) throw this.normalizeRequestError(firstErr);
+      }
+    }
+
+    if (!selectedTarget) {
+      throw new Error('getFinishedRides: no reachable endpoint for first page');
+    }
+
+    for (let pageNumber = 2; pageNumber <= MAX_FINISHED_RIDES_PAGES; pageNumber += 1) {
+      const params = { ...FINISHED_RIDES_PARAMS, 'page[number]': pageNumber };
+      try {
+        const response = await client.get<unknown>(selectedTarget, { searchParams: params });
+        const pageRides = mapFinishedRidesResponse(response.body as Record<string, unknown>);
+        if (pageRides.length === 0) break;
+        allRides.push(...pageRides);
+        if (this.reachedWindowEnd(pageRides, stopBeforeMs)) break;
+      } catch (error) {
+        logger.warn(`[NETWORK] getFinishedRides page request failed for ${this.label}`, {
+          selectedTarget,
+          pageNumber,
+          statusCode: this.getHttpStatus(error),
+        });
+        throw this.normalizeRequestError(error);
+      }
+    }
+
+    return allRides;
+  }
+
+  /** True once a page contains a ride at/older than the rolling-window cutoff (results are newest-first). */
+  private reachedWindowEnd(pageRides: FinishedRide[], stopBeforeMs?: number): boolean {
+    if (stopBeforeMs == null) return false;
+    return pageRides.some((r) => r.startsAt.getTime() <= stopBeforeMs);
   }
 
   /**

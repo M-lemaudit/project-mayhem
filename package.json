@@ -16,8 +16,10 @@
     "test:sniper": "npm run build && node dist/scripts/test-sniper.js",
     "test:bookings": "npm run build && node dist/scripts/test-fetch-bookings.js",
     "test:planned-rides": "npm run build && node dist/scripts/test-fetch-planned-rides.js",
+    "test:finished-rides": "npm run build && node dist/scripts/test-fetch-finished-rides.js",
     "test:integration-rides": "npm run build && node dist/scripts/test-integration-rides.js",
     "test:gap": "npm run build && node dist/scripts/test-gap.js",
+    "reconcile": "npm run build && node dist/jobs/reconcile-billing.js",
     "start": "node dist/index.js",
     "admin:dev": "cd admin && npm run dev"
   },

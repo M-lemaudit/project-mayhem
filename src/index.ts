@@ -7,7 +7,7 @@
 import 'dotenv/config';
 import { AuthError, loginAndGetToken, discoverUserProfile } from './core/auth';
 import { ReauthRequiredError, SniperLoop, type BotFilters } from './core';
-import { BlacklaneApi, BotStateService, RideSyncService } from './services';
+import { BlacklaneApi, BotStateService, RideSyncService, BillingReconciler } from './services';
 import { extractHttpStatusCode, isLikelyDatabaseDown, logger, toErrorDetails, triggerAuthErrorWebhook } from './utils';
 import { getSupabase } from './config/supabase';
 import { decrypt, looksEncrypted } from './utils/crypto';
@@ -19,6 +19,9 @@ if (proxyUrl) {
 
 const WATCHDOG_INTERVAL_MS = 10_000;
 const RIDE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+// Reconciliation is cheap and only matters after rides pass; keep running bots current between
+// daily `npm run reconcile` cron runs. Stopped bots are covered by the standalone job.
+const RECONCILE_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const MAX_IMMEDIATE_FATAL_ERRORS = 2;
 const DB_PING_INTERVAL_MS = 30_000;
 
@@ -97,6 +100,7 @@ async function runBotInstance(
   const prefix = () => `[${email}]`;
   pendingStarts.add(email);
   let rideSyncInterval: ReturnType<typeof setInterval> | undefined;
+  let reconcileInterval: ReturnType<typeof setInterval> | undefined;
 
   const password = resolvePassword(bot.password);
   const botState = new BotStateService(email);
@@ -190,6 +194,15 @@ async function runBotInstance(
           });
         }, RIDE_SYNC_INTERVAL_MS);
 
+        const reconciler = new BillingReconciler(supabase, bot.id);
+        reconcileInterval = setInterval(() => {
+          reconciler.reconcile(api).catch((reconcileError) => {
+            logger.warn(`${prefix()} BillingReconciler interval failed`, {
+              ...toErrorDetails(reconcileError),
+            });
+          });
+        }, RECONCILE_INTERVAL_MS);
+
         logger.info(`${prefix()} Sniper started (Stop = dashboard).`);
         const timezoneId = bot.timezone?.trim() || undefined;
         const sniper = new SniperLoop(api, filters, botState, email, bot.id, timezoneId);
@@ -201,6 +214,8 @@ async function runBotInstance(
       } catch (err) {
         if (rideSyncInterval != null) clearInterval(rideSyncInterval);
         rideSyncInterval = undefined;
+        if (reconcileInterval != null) clearInterval(reconcileInterval);
+        reconcileInterval = undefined;
         instances.delete(email);
 
         if (isLikelyDatabaseDown(err)) {
@@ -337,6 +352,7 @@ async function runBotInstance(
     }
   } finally {
     if (rideSyncInterval != null) clearInterval(rideSyncInterval);
+    if (reconcileInterval != null) clearInterval(reconcileInterval);
     pendingStarts.delete(email);
     instances.delete(email);
     logger.info(`${prefix()} Sniper stopped.`);
