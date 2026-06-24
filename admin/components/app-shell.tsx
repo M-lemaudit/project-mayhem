@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Hourglass, LayoutDashboard, Receipt, LogOut, Menu, X } from 'lucide-react';
+import { Triangle, LayoutDashboard, Receipt, LogOut, Menu, X } from 'lucide-react';
 import { supabase, type BotRow } from '@/lib/supabase';
 import { BRAND } from '@/lib/brand';
 import { StatusDot } from '@/components/status-dot';
@@ -61,7 +61,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const nav = (
     <nav className="flex h-full flex-col gap-1">
       <Link href="/dashboard" className="mb-8 flex items-center gap-2 px-3">
-        <Hourglass className="h-5 w-5 text-accent" strokeWidth={1.5} />
+        <Triangle className="h-4 w-4 text-accent" strokeWidth={1.5} fill="currentColor" />
         <span className="font-display text-xl text-ink">{BRAND.name}</span>
       </Link>
 
@@ -130,7 +130,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Mobile top bar */}
       <header className="sticky top-0 z-40 flex items-center justify-between border-b border-hairline bg-surface/90 px-4 py-3 backdrop-blur lg:hidden">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <Hourglass className="h-5 w-5 text-accent" strokeWidth={1.5} />
+          <Triangle className="h-4 w-4 text-accent" strokeWidth={1.5} fill="currentColor" />
           <span className="font-display text-lg">{BRAND.name}</span>
         </Link>
         <button

@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Hourglass } from 'lucide-react';
+import { Triangle } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 
 function LoginForm() {
@@ -39,7 +39,7 @@ function LoginForm() {
     <main className="flex min-h-screen items-center justify-center bg-paper p-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex items-center gap-2">
-          <Hourglass className="h-6 w-6 text-accent" strokeWidth={1.5} />
+          <Triangle className="h-5 w-5 text-accent" strokeWidth={1.5} fill="currentColor" />
           <span className="font-display text-2xl text-ink">{BRAND.name}</span>
         </div>
 

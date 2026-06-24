@@ -3,6 +3,6 @@
  * the two strings here and the whole UI (header, titles, login, metadata) follows.
  */
 export const BRAND = {
-  name: 'Sablier',
+  name: 'Apex',
   tagline: 'Fleet desk',
 } as const;
