@@ -979,9 +979,9 @@ export class FilterEngine {
     const pickupCity = getCity(pickup);
     const dropoffCity = getCity(dropoff);
 
-    const allowedPickupCities = (filters.allowedPickupCities ?? []).map((c) =>
-      typeof c === 'string' ? c.trim().toLowerCase() : ''
-    ).filter(Boolean);
+    const allowedPickupCities = (filters.allowedPickupCities ?? [])
+      .map((c) => normalizeCity(c))
+      .filter(Boolean);
     if (allowedPickupCities.length > 0) {
       const pickupAllowed = allowedPickupCities.includes(pickupCity);
       traceCompare({
@@ -1010,9 +1010,9 @@ export class FilterEngine {
       }
     }
 
-    const allowedDropoffCities = (filters.allowedDropoffCities ?? []).map((c) =>
-      typeof c === 'string' ? c.trim().toLowerCase() : ''
-    ).filter(Boolean);
+    const allowedDropoffCities = (filters.allowedDropoffCities ?? [])
+      .map((c) => normalizeCity(c))
+      .filter(Boolean);
     if (allowedDropoffCities.length > 0) {
       const dropoffAllowed = allowedDropoffCities.includes(dropoffCity);
       traceCompare({
@@ -1083,8 +1083,22 @@ function getFormattedAddress(loc: IncludedResource | null): string {
   return typeof addr === 'string' ? addr.toLowerCase() : '';
 }
 
-/** Get the lowercase city from an included location, or empty string. */
+/** Get the normalized city from an included location's `city` attribute, or empty string. */
 function getCity(loc: IncludedResource | null): string {
-  const city = loc?.attributes?.city;
-  return typeof city === 'string' ? city.trim().toLowerCase() : '';
+  return normalizeCity(loc?.attributes?.city);
+}
+
+/**
+ * Normalize a city name for forgiving comparison so cosmetic differences don't cause misses.
+ * Lowercases, strips accents/diacritics, and removes everything that isn't a letter or digit
+ * (spaces, hyphens, dots, apostrophes). So "  Saint-Étienne ", "saint etienne", and
+ * "saintetienne" all collapse to the same key "saintetienne".
+ */
+function normalizeCity(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // strip diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ''); // drop spaces, hyphens, dots, apostrophes, etc.
 }
