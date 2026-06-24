@@ -209,6 +209,14 @@ async function runBotInstance(
         instances.set(email, sniper);
 
         await sniper.start();
+        // Bot was turned off (dashboard STOP): run one last reconciliation while the
+        // session is still valid, so a stopped bot's completed rides are fully captured
+        // without waiting for the monthly sweep.
+        await reconciler.reconcile(api).catch((reconcileError) => {
+          logger.warn(`${prefix()} Final reconciliation on stop failed`, {
+            ...toErrorDetails(reconcileError),
+          });
+        });
         consecutiveImmediateFatalErrors = 0;
         break;
       } catch (err) {
