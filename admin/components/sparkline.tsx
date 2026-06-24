@@ -25,7 +25,15 @@ export function Sparkline({
     const gap = n > 1 ? 2 : 0;
     const bw = (width - gap * (n - 1)) / n;
     return (
-      <svg width={width} height={height} className={className} aria-hidden role="img">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        width={width}
+        height={height}
+        className={className}
+        aria-hidden
+        role="img"
+      >
         {values.map((v, i) => {
           const h = Math.max(1, (v / max) * height);
           return (
@@ -51,7 +59,15 @@ export function Sparkline({
   const area = `${line} L${width},${height} L0,${height} Z`;
 
   return (
-    <svg width={width} height={height} className={className} aria-hidden role="img">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      width={width}
+      height={height}
+      className={className}
+      aria-hidden
+      role="img"
+    >
       <path d={area} fill={accent} opacity={0.08} />
       <path d={line} fill="none" stroke={accent} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
     </svg>

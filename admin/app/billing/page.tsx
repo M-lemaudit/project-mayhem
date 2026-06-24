@@ -208,9 +208,9 @@ export default function BillingPage() {
               </div>
               <div className="space-y-1.5">
                 {m.perBot.map((b) => (
-                  <div key={b.botName} className="flex items-center justify-between py-1 text-sm">
-                    <span className="text-ink/90">{b.botName}</span>
-                    <span className="font-mono text-xs text-muted">
+                  <div key={b.botName} className="flex items-center justify-between gap-3 py-1 text-sm">
+                    <span className="min-w-0 truncate text-ink/90">{b.botName}</span>
+                    <span className="shrink-0 text-right font-mono text-xs text-muted">
                       {b.count} · {money(b.gross, m.currency)} ·{' '}
                       <span className="text-accent">{money(b.fee, m.currency)} fee</span>
                     </span>

@@ -38,19 +38,19 @@ export function TimeframePicker({
         ))}
       </div>
       {preset === 'custom' && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             type="date"
             value={customStart}
             onChange={(e) => onCustomStart(e.target.value)}
-            className="rounded-lg border border-hairline bg-surface px-3 py-1.5 text-xs text-ink outline-none focus:border-accent"
+            className="min-w-0 flex-1 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-xs text-ink outline-none focus:border-accent"
           />
           <span className="text-muted">→</span>
           <input
             type="date"
             value={customEnd}
             onChange={(e) => onCustomEnd(e.target.value)}
-            className="rounded-lg border border-hairline bg-surface px-3 py-1.5 text-xs text-ink outline-none focus:border-accent"
+            className="min-w-0 flex-1 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-xs text-ink outline-none focus:border-accent"
           />
         </div>
       )}

@@ -322,7 +322,7 @@ export default function AccountPage({ params }: AccountPageProps) {
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {bot?.status === 'ERROR_AUTH' ? (
             <span className="flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/8 px-4 py-2 text-sm font-medium text-danger">
               <AlertCircle className="h-4 w-4" /> Auth error — re-enter password
