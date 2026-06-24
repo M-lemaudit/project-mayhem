@@ -1,6 +1,7 @@
 -- Billing reconciliation: mark which bot-booked offers were actually completed on Blacklane.
 -- Source of truth = GET /hades/finished_rides (status finished|no_show). A reconciler matches
--- each finished ride back to an accepted_offer by pickup instant + price and stamps these fields.
+-- each finished ride back to an accepted_offer by id (offer_id = finished_rides.id) and stamps
+-- these fields, recording the ride's actual final price.
 -- "Billable" = an accepted_offer whose finished_ride_uuid is set; the 3% fee is computed at
 -- read time from finished_price (BILLING_FEE_RATE in code), so a rate change needs no backfill.
 
