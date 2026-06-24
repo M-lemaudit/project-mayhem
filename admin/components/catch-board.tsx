@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase, type BotRow, type AcceptedOfferRow } from '@/lib/supabase';
 import { money } from '@/lib/timeframe';
 
@@ -13,8 +13,8 @@ interface CatchBoardProps {
   botsById?: Record<string, BotRow>;
 }
 
-const COLLAPSED = 6;
-const EXPANDED = 24;
+const COLLAPSED = 5;
+const PAGE_SIZE = 15;
 
 /** Caught time — to the second; that precision is the whole point of a sniper. */
 function caughtTime(value: string): { time: string; date: string } {
@@ -57,6 +57,7 @@ export function CatchBoard({ mode, botId, botsById }: CatchBoardProps) {
   const [rows, setRows] = useState<AcceptedOfferRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const [page, setPage] = useState(0);
   const byId = botsById ?? {};
 
   // Data isolation: only ever show offers for bots the viewer owns.
@@ -122,7 +123,13 @@ export function CatchBoard({ mode, botId, botsById }: CatchBoardProps) {
     };
   }, [allowedKey]);
 
-  const visible = useMemo(() => rows.slice(0, expanded ? EXPANDED : COLLAPSED), [rows, expanded]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages - 1);
+  const visible = useMemo(() => {
+    if (!expanded) return rows.slice(0, COLLAPSED);
+    const start = currentPage * PAGE_SIZE;
+    return rows.slice(start, start + PAGE_SIZE);
+  }, [rows, expanded, currentPage]);
 
   return (
     <section className="rounded-2xl border border-hairline bg-surface">
@@ -186,14 +193,43 @@ export function CatchBoard({ mode, botId, botsById }: CatchBoardProps) {
           </div>
 
           {rows.length > COLLAPSED && (
-            <div className="border-t border-hairline px-6 py-3">
+            <div className="flex items-center justify-between gap-4 border-t border-hairline px-6 py-3">
               <button
                 type="button"
-                onClick={() => setExpanded((v) => !v)}
+                onClick={() => {
+                  setExpanded((v) => !v);
+                  setPage(0);
+                }}
                 className="text-xs font-medium text-muted transition-colors hover:text-accent"
               >
                 {expanded ? 'Show less' : `Show more (${rows.length - COLLAPSED} more)`}
               </button>
+
+              {expanded && totalPages > 1 && (
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={currentPage === 0}
+                    aria-label="Previous page"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-hairline text-muted transition-colors hover:text-accent disabled:opacity-40 disabled:hover:text-muted"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <span className="font-mono text-xs text-muted">
+                    {currentPage + 1} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                    disabled={currentPage >= totalPages - 1}
+                    aria-label="Next page"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-hairline text-muted transition-colors hover:text-accent disabled:opacity-40 disabled:hover:text-muted"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </>
