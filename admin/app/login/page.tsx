@@ -2,6 +2,8 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Hourglass } from 'lucide-react';
+import { BRAND } from '@/lib/brand';
 
 function LoginForm() {
   const router = useRouter();
@@ -27,21 +29,26 @@ function LoginForm() {
       router.push(from);
       router.refresh();
     } catch {
-      setError('Network error');
+      setError('Network error. Check your connection and try again.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <main className="min-h-screen flex items-center justify-center p-4 bg-zinc-950">
-      <div className="w-full max-w-sm rounded-lg border border-zinc-800 bg-zinc-900/90 p-6 shadow-xl">
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-100 mb-6">
-          Sniper Admin
-        </h1>
-        <form onSubmit={handleSubmit} className="space-y-4">
+    <main className="flex min-h-screen items-center justify-center bg-paper p-4">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 flex items-center gap-2">
+          <Hourglass className="h-6 w-6 text-accent" strokeWidth={1.5} />
+          <span className="font-display text-2xl text-ink">{BRAND.name}</span>
+        </div>
+
+        <h1 className="font-display text-3xl text-ink">Welcome back</h1>
+        <p className="mt-1 mb-8 text-sm text-muted">Sign in to your {BRAND.tagline}.</p>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label htmlFor="email" className="block text-sm text-zinc-400 mb-1.5">
+            <label htmlFor="email" className="mb-1.5 block text-sm text-muted">
               Email
             </label>
             <input
@@ -51,12 +58,12 @@ function LoginForm() {
               onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="email"
-              className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
-              placeholder="admin@example.com"
+              className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted/60 outline-none focus:border-accent"
+              placeholder="you@example.com"
             />
           </div>
           <div>
-            <label htmlFor="password" className="block text-sm text-zinc-400 mb-1.5">
+            <label htmlFor="password" className="mb-1.5 block text-sm text-muted">
               Password
             </label>
             <input
@@ -66,16 +73,14 @@ function LoginForm() {
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="current-password"
-              className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
+              className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted/60 outline-none focus:border-accent"
             />
           </div>
-          {error && (
-            <p className="text-sm text-red-400">{error}</p>
-          )}
+          {error && <p className="text-sm text-danger">{error}</p>}
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium rounded-md transition-colors"
+            className="w-full rounded-lg bg-accent py-2.5 font-medium text-paper transition-colors hover:bg-accent-hover disabled:opacity-50"
           >
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
@@ -87,11 +92,13 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={
-      <main className="min-h-screen flex items-center justify-center p-4 bg-zinc-950">
-        <div className="text-zinc-500">Loading…</div>
-      </main>
-    }>
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-paper p-4">
+          <div className="text-muted">Loading…</div>
+        </main>
+      }
+    >
       <LoginForm />
     </Suspense>
   );

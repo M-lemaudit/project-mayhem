@@ -2,122 +2,116 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Atelier — a warm, light, private-banking aesthetic.
+  Paper background, ink type, one deep bottle-green accent. Everything is
+  separated by 1px hairlines, never drop shadows. Boldness is spent in one
+  place (the Catch Board); the rest stays quiet.
+*/
 @layer base {
   :root {
-    --background: 240 10% 4%;
-    --foreground: 240 5% 90%;
-    --card: 240 6% 7%;
-    --card-foreground: 240 5% 90%;
-    --popover: 240 6% 7%;
-    --popover-foreground: 240 5% 90%;
-    --primary: 45 64% 52%; /* #d4af35 */
-    --primary-foreground: 45 100% 10%;
-    --background-dark: 45 10% 8%; /* #171612 */
-    --background-light: 45 5% 96%; /* #f8f7f6 */
-    --neutral-muted: 45 12% 19%; /* #37342a */
-    --neutral-border: 45 13% 28%; /* #514c3e */
+    --paper: #faf8f4;
+    --surface: #ffffff;
+    --ink: #16140f;
+    --muted: #6b6658;
+    --hairline: #e7e2d8;
+    --accent: #1f3d2b;
+    --accent-hover: #2e5c40;
+    --danger: #b23a2e;
+  }
+
+  * {
+    border-color: var(--hairline);
+  }
+
+  body {
+    font-family: var(--font-sans), system-ui, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Money + display figures: serif, tabular so columns line up. */
+  .font-display {
+    font-family: var(--font-display), Georgia, serif;
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* Data, timestamps, codes: mono, tabular. */
+  .font-mono {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
   }
 }
 
 @layer utilities {
-  .bg-background-dark { background-color: #171612; }
-  .bg-background-light { background-color: #f8f7f6; }
-  .bg-neutral-muted { background-color: #37342a; }
-  .border-neutral-border { border-color: #514c3e; }
+  .tabular {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  /* Eyebrow label used above stats and section titles. */
+  .eyebrow {
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .hairline {
+    border-color: var(--hairline);
+  }
 }
 
-body {
-  font-family: 'Inter', sans-serif;
-  background: #171612;
-  color: #e2e8f0;
-  min-height: 100vh;
+/* A single restrained reveal for catch-board rows + page sections. */
+@keyframes atelier-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-.pulse-gold {
-  box-shadow: 0 0 0 0 rgba(212, 175, 53, 0.7);
-  animation: pulse 2s infinite;
+.rise {
+  animation: atelier-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-@keyframes pulse {
-  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(212, 175, 53, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(212, 175, 53, 0); }
-  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(212, 175, 53, 0); }
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 
-.shimmer {
-  position: relative;
-  overflow: hidden;
-}
-
-.shimmer::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  transform: translateX(-100%);
-  background-image: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0) 0,
-    rgba(255, 255, 255, 0.05) 20%,
-    rgba(255, 255, 255, 0.1) 60%,
-    rgba(255, 255, 255, 0)
-  );
-  animation: shimmer 2s infinite;
-}
-
-@keyframes shimmer {
-  100% { transform: translateX(100%); }
-}
-
-/* Elite dashboard helpers (from Stitch design) */
-.mesh-gradient {
-  background-image:
-    radial-gradient(at 0% 0%, rgba(212, 175, 53, 0.05) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(212, 175, 53, 0.03) 0px, transparent 50%);
-}
-
-.glass-card {
-  background: rgba(20, 20, 20, 0.4);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.glass-card:hover {
-  border-color: rgba(212, 175, 53, 0.3);
-  background: rgba(20, 20, 20, 0.6);
-}
-
-.tracking-luxury {
-  letter-spacing: 0.15em;
-}
-
-.tracking-ultra-wide {
-  letter-spacing: 0.2em;
-}
-
-/* Scrollbar: dark theme (Chrome, Safari, Edge) */
+/* Scrollbars: light, unobtrusive. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(82 82 91) rgb(39 39 42);
+  scrollbar-color: #d8d2c6 transparent;
 }
-
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-
 *::-webkit-scrollbar-track {
-  background: rgb(39 39 42); /* zinc-800 */
+  background: transparent;
 }
-
 *::-webkit-scrollbar-thumb {
-  background: rgb(82 82 91); /* zinc-600 */
+  background: #d8d2c6;
   border-radius: 4px;
 }
-
 *::-webkit-scrollbar-thumb:hover {
-  background: rgb(113 113 122); /* zinc-500 */
+  background: #c4bdae;
+}
+
+/* Keyboard focus floor — always visible, accent ring. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

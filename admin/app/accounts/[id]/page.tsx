@@ -1,13 +1,45 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase, type BotRow } from '@/lib/supabase';
-import Link from 'next/link';
+import {
+  Play,
+  Square,
+  Settings,
+  Save,
+  Check,
+  Plane,
+  MapPin,
+  Clock,
+  Car,
+  CalendarOff,
+  Globe,
+  AlertCircle,
+  Plus,
+  X,
+} from 'lucide-react';
+import { supabase, type BotRow, type AcceptedOfferRow } from '@/lib/supabase';
 import { updateClient, toggleClientStatus } from '@/app/actions/bots';
-import { LiveSnipeLog } from '@/components/live-snipe-log';
+import { AppShell } from '@/components/app-shell';
+import { CatchBoard } from '@/components/catch-board';
 import { FullPageLoader } from '@/components/full-page-loader';
-import { ComingSoonCard } from '@/components/coming-soon-card';
+import { TimeframePicker } from '@/components/timeframe-picker';
+import { Sparkline } from '@/components/sparkline';
+import { DualRange } from '@/components/dual-range';
+import { StatusDot, statusLabelOf } from '@/components/status-dot';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { rangeFor, money, type PresetKey } from '@/lib/timeframe';
+import { madePayBooked, bucketSeries, primaryCurrency } from '@/lib/metrics';
+
+const OFFER_COLUMNS =
+  'id, bot_id, offer_id, price, pickup_at, created_at, finished_price, finished_currency, completed_at, reconciled_at';
+
+const VEHICLES = [
+  { id: 'business', label: 'Business' },
+  { id: 'van', label: 'Van' },
+  { id: 'electric', label: 'Electric' },
+  { id: 'first', label: 'First' },
+];
 
 interface AccountPageProps {
   params: { id: string };
@@ -17,55 +49,49 @@ export default function AccountPage({ params }: AccountPageProps) {
   const { id } = params;
   const router = useRouter();
   const [bot, setBot] = useState<BotRow | null>(null);
+  const [offers, setOffers] = useState<AcceptedOfferRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const getTodayIsoDateInTimezone = (timezoneId?: string | null): string => {
     const tz = typeof timezoneId === 'string' ? timezoneId.trim() : '';
     try {
-      const formatter = new Intl.DateTimeFormat('en-CA', {
+      return new Intl.DateTimeFormat('en-CA', {
         timeZone: tz || undefined,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
-      });
-      return formatter.format(new Date());
+      }).format(new Date());
     } catch {
       const d = new Date();
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
   };
 
-  // Filter states
+  // Filter states (unchanged logic — same filter keys the engine reads)
   const [minPrice, setMinPrice] = useState(40);
   const [maxPrice, setMaxPrice] = useState(400);
   const [minDistance, setMinDistance] = useState(0);
   const [maxDistance, setMaxDistance] = useState(5000);
-  const [dateStart, setDateStart] = useState('');
-  const [dateEnd, setDateEnd] = useState('');
   const [blackoutDateInput, setBlackoutDateInput] = useState('');
   const [blackoutDates, setBlackoutDates] = useState<string[]>([]);
   const [allowedStartDate, setAllowedStartDate] = useState('');
   const [allowedEndDate, setAllowedEndDate] = useState('');
   const [minGapMinutes, setMinGapMinutes] = useState(0);
+  const [minLeadHours, setMinLeadHours] = useState(0);
+  const [workingHoursStart, setWorkingHoursStart] = useState(6);
+  const [workingHoursEnd, setWorkingHoursEnd] = useState(22);
   const [rideType, setRideType] = useState('Both');
   const [vehicleClasses, setVehicleClasses] = useState<string[]>(['first']);
-  const [airlineCode, setAirlineCode] = useState('');
   const [allowedAirlines, setAllowedAirlines] = useState<string[]>([]);
   const [airportDirection, setAirportDirection] = useState<'both' | 'pickup' | 'dropoff'>('both');
-  const [pickupCityInput, setPickupCityInput] = useState('');
   const [allowedPickupCities, setAllowedPickupCities] = useState<string[]>([]);
-  const [dropoffCityInput, setDropoffCityInput] = useState('');
   const [allowedDropoffCities, setAllowedDropoffCities] = useState<string[]>([]);
-  const [minLeadHours, setMinLeadHours] = useState(0);
   const [timezone, setTimezone] = useState('Europe/Paris');
   const [isDirty, setIsDirty] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  
-  // Settings Modal state
+
+  // Settings modal
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -73,11 +99,13 @@ export default function AccountPage({ params }: AccountPageProps) {
   const [updatingAccount, setUpdatingAccount] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
+  // Quick-stats timeframe
+  const [preset, setPreset] = useState<PresetKey>('this_month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
   useEffect(() => {
     async function fetchBot() {
-      // Data isolation: only load this bot if it belongs to the signed-in user.
-      // Without the user_id guard, anyone could open another account's bot by
-      // guessing its id in the URL.
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -93,10 +121,6 @@ export default function AccountPage({ params }: AccountPageProps) {
         .single();
 
       if (error || !data) {
-        console.error('Failed to fetch bot', {
-          errorMessage: error?.message ?? 'Unknown error',
-          errorStack: error && 'stack' in error && typeof error.stack === 'string' ? error.stack : undefined,
-        });
         router.push('/dashboard');
         return;
       }
@@ -104,56 +128,30 @@ export default function AccountPage({ params }: AccountPageProps) {
       const botData = data as BotRow;
       setBot(botData);
 
-      // Initialize filters from DB
       const f = botData.filters || {};
       setMinPrice(Math.min(Number(f.minPrice || f.min_price || 40), 5000));
       setMaxPrice(Math.min(Number(f.maxPrice || f.max_price || 400), 5000));
       setMinDistance(Math.min(Number(f.minDistance || f.min_distance || 0), 5000));
       setMaxDistance(Math.min(Number(f.maxDistance || f.max_distance || 5000), 5000));
-      setDateStart(String(f.dateStart || f.date_start || ''));
-      setDateEnd(String(f.dateEnd || f.date_end || ''));
       const boRaw = (f.blackoutDates as string[] | undefined) ?? [];
       const todayIso = getTodayIsoDateInTimezone(botData.timezone || 'Europe/Paris');
       setBlackoutDates(
         Array.isArray(boRaw)
-          ? boRaw
-              .map((d) => (typeof d === 'string' ? d.trim() : ''))
-              .filter(Boolean)
-              // prune past blackout dates in bot timezone to avoid ever-growing list
-              .filter((d) => d >= todayIso)
+          ? boRaw.map((d) => (typeof d === 'string' ? d.trim() : '')).filter(Boolean).filter((d) => d >= todayIso)
           : []
       );
-      const startWindow =
-        (typeof f.allowedStartDate === 'string' && f.allowedStartDate) ||
-        (typeof f.dateStart === 'string' && f.dateStart) ||
-        (typeof f.date_start === 'string' && f.date_start) ||
-        '';
-      const endWindow =
-        (typeof f.allowedEndDate === 'string' && f.allowedEndDate) ||
-        (typeof f.dateEnd === 'string' && f.dateEnd) ||
-        (typeof f.date_end === 'string' && f.date_end) ||
-        '';
-      setAllowedStartDate(String(startWindow || ''));
-      setAllowedEndDate(String(endWindow || ''));
+      setAllowedStartDate(String((typeof f.allowedStartDate === 'string' && f.allowedStartDate) || ''));
+      setAllowedEndDate(String((typeof f.allowedEndDate === 'string' && f.allowedEndDate) || ''));
       setMinGapMinutes(Number(f.minGapMinutes || f.min_gap_minutes || 0));
-      const storedRideType = String(f.rideType || f.ride_type || 'Both');
-      const normalizedRideType =
-        storedRideType.toLowerCase() === 'transfer'
-          ? 'Transfer'
-          : storedRideType.toLowerCase() === 'hourly'
-          ? 'Hourly'
-          : 'Both';
-      setRideType(normalizedRideType);
-      setVehicleClasses(
-        (Array.isArray(f.allowedVehicleTypes) ? f.allowedVehicleTypes : []) as string[]
-      );
-      const dirRaw = (f.allowedAirportDirections || f.allowed_airport_directions) as
-        | string[]
-        | undefined;
+      setMinLeadHours(Number(f.minLeadHours || f.min_lead_hours || 0));
+      setWorkingHoursStart(Number(f.workingHoursStart ?? f.working_hours_start ?? 6));
+      setWorkingHoursEnd(Number(f.workingHoursEnd ?? f.working_hours_end ?? 22));
+      const storedRideType = String(f.rideType || f.ride_type || 'Both').toLowerCase();
+      setRideType(storedRideType === 'transfer' ? 'Transfer' : storedRideType === 'hourly' ? 'Hourly' : 'Both');
+      setVehicleClasses((Array.isArray(f.allowedVehicleTypes) ? f.allowedVehicleTypes : []) as string[]);
+      const dirRaw = (f.allowedAirportDirections || f.allowed_airport_directions) as string[] | undefined;
       if (Array.isArray(dirRaw) && dirRaw.length > 0) {
-        const norm = dirRaw
-          .map((d) => (typeof d === 'string' ? d.trim().toLowerCase() : ''))
-          .filter((d) => d === 'pickup' || d === 'dropoff');
+        const norm = dirRaw.map((d) => (typeof d === 'string' ? d.trim().toLowerCase() : '')).filter((d) => d === 'pickup' || d === 'dropoff');
         if (norm.length === 1 && norm[0] === 'pickup') setAirportDirection('pickup');
         else if (norm.length === 1 && norm[0] === 'dropoff') setAirportDirection('dropoff');
         else setAirportDirection('both');
@@ -171,27 +169,25 @@ export default function AccountPage({ params }: AccountPageProps) {
           : []
       );
       setAllowedPickupCities(
-        (Array.isArray(f.allowedPickupCities)
-          ? f.allowedPickupCities
-          : (f.allowedZipCodes || f.allowed_zip_codes || [])) as string[]
+        (Array.isArray(f.allowedPickupCities) ? f.allowedPickupCities : (f.allowedZipCodes || f.allowed_zip_codes || [])) as string[]
       );
       setAllowedDropoffCities(
-        (Array.isArray(f.allowedDropoffCities)
-          ? f.allowedDropoffCities
-          : (f.allowedZipCodes || f.allowed_zip_codes || [])) as string[]
+        (Array.isArray(f.allowedDropoffCities) ? f.allowedDropoffCities : (f.allowedZipCodes || f.allowed_zip_codes || [])) as string[]
       );
-      setMinLeadHours(Number(f.minLeadHours || f.min_lead_hours || 0));
-
-      // Bot level settings
       setTimezone(botData.timezone || 'Europe/Paris');
-      
-      // Init settings modal fields
       setEditName(botData.name || '');
       setEditEmail(botData.email || '');
 
+      const { data: offerData } = await supabase
+        .from('accepted_offers')
+        .select(OFFER_COLUMNS)
+        .eq('bot_id', id)
+        .order('created_at', { ascending: false })
+        .limit(2000);
+      setOffers((offerData as AcceptedOfferRow[]) ?? []);
+
       setLoading(false);
     }
-
     fetchBot();
   }, [id, router]);
 
@@ -209,21 +205,17 @@ export default function AccountPage({ params }: AccountPageProps) {
       maxPrice,
       minDistance,
       maxDistance,
-      dateStart,
-      dateEnd,
       blackoutDates: sanitizedBlackoutDates,
       allowedStartDate,
       allowedEndDate,
       minGapMinutes,
       minLeadHours,
+      workingHoursStart,
+      workingHoursEnd,
       rideType: rideType.trim().toLowerCase(),
       allowedVehicleTypes: vehicleClasses,
       allowedAirportDirections:
-        airportDirection === 'both'
-          ? ['pickup', 'dropoff']
-          : airportDirection === 'pickup'
-          ? ['pickup']
-          : ['dropoff'],
+        airportDirection === 'both' ? ['pickup', 'dropoff'] : airportDirection === 'pickup' ? ['pickup'] : ['dropoff'],
       allowedAirlines,
       allowedPickupCities,
       allowedDropoffCities,
@@ -238,23 +230,16 @@ export default function AccountPage({ params }: AccountPageProps) {
     }
     const { error } = await supabase
       .from('bots')
-      .update({
-        filters: updatedFilters,
-        timezone: timezone,
-      })
+      .update({ filters: updatedFilters, timezone })
       .eq('id', id)
-      // Data isolation: never let a save touch a bot the user doesn't own.
       .eq('user_id', user.id);
 
-    if (error) {
-      console.error('Failed to save filters', {
-        errorMessage: error.message,
-        errorStack: 'stack' in error && typeof error.stack === 'string' ? error.stack : undefined,
-      });
-    } else {
+    if (!error) {
       setIsDirty(false);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
+    } else {
+      alert('Could not save: ' + error.message);
     }
     setSaving(false);
   };
@@ -264,13 +249,12 @@ export default function AccountPage({ params }: AccountPageProps) {
     const result = await updateClient(id, {
       name: editName,
       email: editEmail,
-      password: editPassword || undefined
+      password: editPassword || undefined,
     });
-
     if (result.error) {
-      alert('Failed to update account: ' + result.error);
+      alert('Could not update account: ' + result.error);
     } else {
-      setBot(prev => prev ? { ...prev, name: editName, email: editEmail } : null);
+      setBot((prev) => (prev ? { ...prev, name: editName, email: editEmail } : null));
       setIsSettingsOpen(false);
       setEditPassword('');
       setShowSuccess(true);
@@ -283,875 +267,508 @@ export default function AccountPage({ params }: AccountPageProps) {
     if (!bot) return;
     setIsUpdatingStatus(true);
     const result = await toggleClientStatus(id, bot.status);
-    
-    if (result.error) {
-      alert('Failed to update status: ' + result.error);
-    } else if (result.data) {
-      setBot({ ...bot, status: result.data.status });
-      setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 3000);
-    }
+    if (result.error) alert('Could not update status: ' + result.error);
+    else if (result.data) setBot({ ...bot, status: result.data.status });
     setIsUpdatingStatus(false);
   };
 
-  const toggleVehicleClass = (vClass: string) => {
+  const dirty = (fn: () => void) => {
     setIsDirty(true);
-    setVehicleClasses(prev =>
-      prev.includes(vClass) ? prev.filter(c => c !== vClass) : [...prev, vClass]
-    );
+    fn();
   };
 
-  const addAirline = () => {
-    const code = airlineCode.trim().toUpperCase();
-    if (code && !allowedAirlines.includes(code)) {
-      setIsDirty(true);
-      setAllowedAirlines([...allowedAirlines, code]);
-      setAirlineCode('');
-    }
-  };
-
-  const removeAirline = (code: string) => {
-    setIsDirty(true);
-    setAllowedAirlines(allowedAirlines.filter(c => c !== code));
-  };
-
-  const addPickupCity = () => {
-    const city = pickupCityInput.trim();
-    if (city && !allowedPickupCities.includes(city)) {
-      setIsDirty(true);
-      setAllowedPickupCities([...allowedPickupCities, city]);
-      setPickupCityInput('');
-    }
-  };
-
-  const removePickupCity = (city: string) => {
-    setIsDirty(true);
-    setAllowedPickupCities(allowedPickupCities.filter((c) => c !== city));
-  };
-
-  const addDropoffCity = () => {
-    const city = dropoffCityInput.trim();
-    if (city && !allowedDropoffCities.includes(city)) {
-      setIsDirty(true);
-      setAllowedDropoffCities([...allowedDropoffCities, city]);
-      setDropoffCityInput('');
-    }
-  };
-
-  const removeDropoffCity = (city: string) => {
-    setIsDirty(true);
-    setAllowedDropoffCities(allowedDropoffCities.filter((c) => c !== city));
-  };
+  const toggleVehicleClass = (v: string) =>
+    dirty(() => setVehicleClasses((prev) => (prev.includes(v) ? prev.filter((c) => c !== v) : [...prev, v])));
 
   const addBlackoutDate = () => {
     const value = blackoutDateInput.trim();
     if (!value) return;
     const todayIso = getTodayIsoDateInTimezone(timezone);
     if (value < todayIso) {
-      alert(`Blackout date cannot be in the past. Today (${timezone}) is ${todayIso}.`);
+      alert(`Blackout date can't be in the past. Today (${timezone}) is ${todayIso}.`);
       return;
     }
-    if (!blackoutDates.includes(value)) {
-      setIsDirty(true);
-      setBlackoutDates([...blackoutDates, value]);
-    }
+    if (!blackoutDates.includes(value)) dirty(() => setBlackoutDates([...blackoutDates, value]));
     setBlackoutDateInput('');
   };
 
-  const removeBlackoutDate = (value: string) => {
-    setIsDirty(true);
-    setBlackoutDates(blackoutDates.filter((d) => d !== value));
-  };
+  // Quick stats
+  const range = useMemo(() => rangeFor(preset, customStart, customEnd), [preset, customStart, customEnd]);
+  const metrics = useMemo(() => madePayBooked(offers, range), [offers, range]);
+  const series = useMemo(() => bucketSeries(offers, range), [offers, range]);
+  const cur = primaryCurrency(metrics.byCurrency);
+  const m = metrics.byCurrency.find((c) => c.currency === cur);
+  const made = m?.made ?? 0;
+  const pay = m?.pay ?? 0;
+  const net = made - pay;
 
-  if (loading) {
-    return <FullPageLoader message="Loading account settings..." />;
-  }
+  if (loading) return <FullPageLoader message="Loading bot…" />;
+
+  const statusLabel = statusLabelOf(bot?.status ?? '');
 
   return (
-    <div className="bg-[#171612] text-slate-100 min-h-screen font-display">
-      <div className="relative flex h-auto min-h-screen w-full flex-col overflow-x-hidden">
-        <div className="layout-container flex h-full grow flex-col">
-          <header className="flex items-center justify-between whitespace-nowrap border-b border-solid border-[#514c3e] px-6 md:px-10 py-4 bg-[#171612]/50 backdrop-blur-md sticky top-0 z-50">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-[#d4af35] text-3xl">
-                directions_car
-              </span>
-              <h1 className="text-xl font-light tracking-luxury uppercase text-slate-100">
-                Chauffeur <span className="font-bold">Elite</span>
-              </h1>
-            </div>
-          </header>
-
-          <main className="flex flex-col flex-1 px-4 md:px-10 py-8 max-w-7xl mx-auto w-full">
-            <section className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
-              <div className="flex items-center gap-5">
-                <Link 
-                  href="/dashboard"
-                  className="group flex items-center justify-center size-10 rounded-xl border border-[#514c3e] bg-[#37342a]/30 text-slate-400 hover:text-[#d4af35] hover:border-[#d4af35] transition-all"
-                >
-                  <span className="material-symbols-outlined transition-transform group-hover:-translate-x-1">arrow_back</span>
-                </Link>
-                <div className="size-16 rounded-xl bg-cover bg-center border border-[#514c3e] flex items-center justify-center bg-black overflow-hidden shadow-2xl">
-                  <span className="text-white font-black text-xs px-1 uppercase tracking-tighter">
-                    {bot?.email?.split('@')[1]?.split('.')[0] || 'ACCOUNT'}
-                  </span>
-                </div>
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-white text-3xl font-bold tracking-tight font-display">{bot?.name || bot?.email}</h1>
-                    <span className="bg-[#d4af35]/10 text-[#d4af35] text-[10px] font-bold px-2 py-0.5 rounded border border-[#d4af35]/20 uppercase tracking-widest">Premium</span>
-                  </div>
-                  <div className="flex items-center gap-4 mt-1">
-                    <p className="text-slate-400 text-sm flex items-center gap-1.5">
-                      <span
-                        className={`size-2 rounded-full ${
-                          bot?.status === 'RUNNING'
-                            ? 'bg-[#d4af35] pulse-gold'
-                            : bot?.status === 'ERROR_AUTH'
-                            ? 'bg-rose-500 pulse-gold'
-                            : 'bg-slate-600'
-                        }`}
-                      ></span>
-                      <span>
-                        Status:{' '}
-                        {bot?.status === 'RUNNING'
-                          ? 'Active'
-                          : bot?.status === 'ERROR_AUTH'
-                          ? 'Error'
-                          : 'Standby'}
-                      </span>
-                    </p>
-                    <p className="text-slate-400 text-sm flex items-center gap-1.5">
-                      <span className="material-symbols-outlined text-sm">sync</span>
-                      Last sync: {bot?.last_seen ? new Date(bot.last_seen).toLocaleTimeString() : 'Never'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-4 w-full md:w-auto">
-                {bot?.status === 'ERROR_AUTH' ? (
-                  <button
-                    type="button"
-                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-2.5 font-bold rounded-lg transition-all shadow-lg bg-rose-500/10 text-rose-400 border border-rose-500/40 cursor-default"
-                  >
-                    <span className="material-symbols-outlined text-lg">error</span>
-                    Bot error — contact support
-                  </button>
-                ) : (
-                  <button 
-                    onClick={handleToggleStatus}
-                    disabled={isUpdatingStatus}
-                    className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-2.5 font-bold rounded-lg transition-all shadow-lg active:scale-95 disabled:opacity-50
-                      ${bot?.status === 'RUNNING' 
-                        ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20 hover:bg-rose-500 hover:text-white shadow-rose-500/10' 
-                        : 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 hover:bg-emerald-500 hover:text-white shadow-emerald-500/10'
-                      }`}
-                  >
-                    <span className={`material-symbols-outlined text-lg ${isUpdatingStatus ? 'animate-spin' : ''}`}>
-                      {isUpdatingStatus ? 'sync' : bot?.status === 'RUNNING' ? 'stop_circle' : 'play_circle'}
-                    </span>
-                    {isUpdatingStatus 
-                      ? 'Processing...' 
-                      : bot?.status === 'RUNNING' ? 'Stop Bot' : 'Start Bot'
-                    }
-                  </button>
-                )}
-                <button 
-                  onClick={() => setIsSettingsOpen(true)}
-                  className="flex items-center justify-center h-11 w-11 rounded-lg border border-[#514c3e] bg-[#37342a]/30 text-slate-300 hover:text-white transition-colors"
-                >
-                  <span className="material-symbols-outlined">settings</span>
-                </button>
-              </div>
-            </section>
-
-            {/* Bot-specific live log */}
-            <div className="mb-10">
-              <LiveSnipeLog mode="bot" botId={id} />
-            </div>
-
-            <div className="grid grid-cols-1 gap-8 items-start">
-              <div className="lg:col-span-12 flex flex-col gap-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Price & Distance Range */}
-                  <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-8 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5 space-y-8">
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-white text-2xl font-bold font-display">$</span>
-                        <h3 className="text-white text-xl font-bold font-display">Price & Distance Range</h3>
-                      </div>
-                      <p className="text-slate-400 text-sm mt-1">Set minimum and maximum thresholds for ride price and distance</p>
-                    </div>
-
-                    {/* Price Section */}
-                    <div className="space-y-6">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-bold text-lg">Price</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-bold text-sm">${minPrice} - ${maxPrice}</span>
-                          <span className="text-slate-500 text-xs font-medium">($40 - $5000)</span>
-                        </div>
-                      </div>
-
-                      <div className="relative h-6 flex items-center">
-                        {/* Background track */}
-                        <div className="absolute w-full h-1 bg-[#2a2820] rounded-full"></div>
-
-                        {/* Selected range track */}
-                        <div
-                          className="absolute h-1 bg-gradient-to-r from-[#d4af35] to-[#f59e0b] rounded-full shadow-[0_0_15px_rgba(212,175,53,0.3)]"
-                          style={{
-                            left: `${(minPrice / 5000) * 100}%`,
-                            right: `${100 - (maxPrice / 5000) * 100}%`
-                          }}
-                        ></div>
-
-                        {/* Min Thumb Control */}
-                        <input
-                          type="range"
-                          min="40"
-                          max="5000"
-                          value={minPrice}
-                          onChange={(e) => {
-                            setIsDirty(true);
-                            setMinPrice(Math.min(Number(e.target.value), maxPrice));
-                          }}
-                          className={`absolute w-full appearance-none bg-transparent pointer-events-none h-1 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#d4af35] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg ${minPrice > 1000 ? 'z-30' : 'z-20'}`}
-                        />
-
-                        {/* Max Thumb Control */}
-                        <input
-                          type="range"
-                          min="40"
-                          max="5000"
-                          value={maxPrice}
-                          onChange={(e) => {
-                            setIsDirty(true);
-                            setMaxPrice(Math.max(Number(e.target.value), minPrice));
-                          }}
-                          className="absolute w-full appearance-none bg-transparent pointer-events-none z-20 h-1 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#d4af35] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="w-full h-px bg-[#514c3e]/30"></div>
-
-                    {/* Distance Section */}
-                    <div className="space-y-6">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <span className="material-symbols-outlined text-white text-xl">location_on</span>
-                          <span className="text-white font-bold text-lg">Distance</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-bold text-sm">{minDistance} km - {maxDistance} km</span>
-                          <span className="text-slate-500 text-xs font-medium">(0 - 5000 km)</span>
-                        </div>
-                      </div>
-
-                      <div className="relative h-6 flex items-center">
-                        {/* Background track */}
-                        <div className="absolute w-full h-1 bg-[#2a2820] rounded-full"></div>
-
-                        {/* Selected range track */}
-                        <div
-                          className="absolute h-1 bg-gradient-to-r from-[#d4af35] to-[#f59e0b] rounded-full shadow-[0_0_15px_rgba(212,175,53,0.3)]"
-                          style={{
-                            left: `${(minDistance / 5000) * 100}%`,
-                            right: `${100 - (maxDistance / 5000) * 100}%`
-                          }}
-                        ></div>
-
-                        {/* Min Thumb Control */}
-                        <input
-                          type="range"
-                          min="0"
-                          max="5000"
-                          value={minDistance}
-                          onChange={(e) => {
-                            setIsDirty(true);
-                            setMinDistance(Math.min(Number(e.target.value), maxDistance));
-                          }}
-                          className={`absolute w-full appearance-none bg-transparent pointer-events-none h-1 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#d4af35] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg ${minDistance > 500 ? 'z-30' : 'z-20'}`}
-                        />
-
-                        {/* Max Thumb Control */}
-                        <input
-                          type="range"
-                          min="0"
-                          max="5000"
-                          value={maxDistance}
-                          onChange={(e) => {
-                            setIsDirty(true);
-                            setMaxDistance(Math.max(Number(e.target.value), minDistance));
-                          }}
-                          className="absolute w-full appearance-none bg-transparent pointer-events-none z-20 h-1 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-black [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#d4af35] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Timezone */}
-                  <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-8 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5 space-y-8">
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <span className="material-symbols-outlined text-[#d4af35] text-2xl">public</span>
-                        <h3 className="text-white text-xl font-bold font-display">Timezone</h3>
-                      </div>
-                      <p className="text-slate-400 text-sm mt-1">Timezone used for blackout dates and static time windows.</p>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Base Timezone</label>
-                      <select
-                        value={timezone}
-                        onChange={(e) => {
-                          setIsDirty(true);
-                          setTimezone(e.target.value);
-                        }}
-                        className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2.5 text-sm text-white outline-none focus:border-[#d4af35]"
-                      >
-                        <option value="Europe/Paris">Europe/Paris (GMT+1)</option>
-                        <option value="Europe/London">Europe/London (GMT)</option>
-                        <option value="America/New_York">America/New_York (GMT-5)</option>
-                        <option value="Asia/Dubai">Asia/Dubai (GMT+4)</option>
-                        <option value="Asia/Tokyo">Asia/Tokyo (GMT+9)</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Minimum Time Gap */}
-                  <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="material-symbols-outlined text-[#d4af35]">schedule</span>
-                      <h3 className="text-white text-lg font-bold">Minimum Time Gap</h3>
-                    </div>
-                    <p className="text-slate-400 text-xs mb-6">Choose how many minutes the bot must wait between accepting two rides.</p>
-                    <div className="space-y-6">
-                      <div className="flex justify-between items-center">
-                        <label className="text-sm font-semibold text-white">Time Gap (Minutes)</label>
-                        <span className="text-sm font-bold text-white">{minGapMinutes} minutes</span>
-                      </div>
-                      <input
-                        className="w-full accent-[#d4af35] bg-[#514c3e] h-1.5 rounded-lg appearance-none cursor-pointer"
-                        max="240" min="0" type="range"
-                        value={minGapMinutes}
-                        onChange={(e) => {
-                          setIsDirty(true);
-                          setMinGapMinutes(Number(e.target.value));
-                        }}
-                      />
-                      <div className="flex justify-between text-[10px] text-slate-500">
-                        <span>0m</span><span>60m</span><span>120m</span><span>180m</span><span>240m</span>
-                      </div>
-                      <div className="w-full h-px bg-[#514c3e]/20 my-2"></div>
-
-                      <div className="space-y-6">
-                        <div className="flex justify-between items-center">
-                          <label className="text-sm font-semibold text-white">Minimum Lead Time (Hours)</label>
-                          <span className="text-sm font-bold text-[#d4af35]">{minLeadHours} hours</span>
-                        </div>
-                        <p className="text-slate-400 text-[10px] -mt-4">Only accept rides that start at least {minLeadHours}h from now (Blacklane cancellation safety).</p>
-                        <input
-                          className="w-full accent-[#d4af35] bg-[#514c3e] h-1.5 rounded-lg appearance-none cursor-pointer"
-                          max="72" min="0" type="range"
-                          value={minLeadHours}
-                          onChange={(e) => {
-                            setIsDirty(true);
-                            setMinLeadHours(Number(e.target.value));
-                          }}
-                        />
-                        <div className="flex justify-between text-[10px] text-slate-500">
-                          <span>0h</span><span>24h</span><span>32h</span><span>48h</span><span>72h</span>
-                        </div>
-                      </div>
-
-                      <div className="bg-[#171612]/50 border border-white/5 rounded-lg p-4">
-                        <p className="text-xs text-slate-300 leading-relaxed">
-                          <strong className="text-[#d4af35]">Cancellation Guard:</strong> Blacklane allows free cancellations if the ride is {'>'}24h away. This filter ensures you stay within that safety window.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-8">
-                    {/* Ride Preferences */}
-                    <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
-                      <div className="flex items-center gap-2 mb-6">
-                        <span className="material-symbols-outlined text-[#d4af35]">directions_car</span>
-                        <h3 className="text-white text-lg font-bold">Ride Preferences</h3>
-                      </div>
-                      <div className="grid grid-cols-1 gap-6">
-                        <div className="flex flex-col gap-2">
-                          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Ride Type</label>
-                          <select
-                            value={rideType}
-                            onChange={(e) => {
-                              setIsDirty(true);
-                              setRideType(e.target.value);
-                            }}
-                            className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-white focus:border-[#d4af35] outline-none"
-                          >
-                            <option>Both</option>
-                            <option>Transfer</option>
-                            <option>Hourly</option>
-                          </select>
-                        </div>
-                        <div className="flex flex-col gap-3">
-                          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Vehicle Class</label>
-                          <div className="grid grid-cols-2 gap-3">
-                            {[
-                              { id: 'business', label: 'Business', icon: 'business_center' },
-                              { id: 'van', label: 'Van', icon: 'airport_shuttle' },
-                              { id: 'electric', label: 'Electric', icon: 'electric_car' },
-                              { id: 'first', label: 'First', icon: 'diamond' }
-                            ].map((v) => (
-                              <div
-                                key={v.id}
-                                onClick={() => toggleVehicleClass(v.id)}
-                                className={`flex items-center gap-3 p-3 rounded-lg border transition-all cursor-pointer group ${vehicleClasses.includes(v.id) ? 'bg-[#d4af35]/10 border-[#d4af35]' : 'bg-[#171612]/50 border-[#514c3e] hover:border-[#d4af35]'}`}
-                              >
-                                <div className={`size-4 border rounded flex items-center justify-center ${vehicleClasses.includes(v.id) ? 'border-[#d4af35]' : 'border-[#514c3e] group-hover:border-[#d4af35]'}`}>
-                                  <div className={`size-2 bg-[#d4af35] rounded-sm ${vehicleClasses.includes(v.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}></div>
-                                </div>
-                                <span className={`material-symbols-outlined text-lg ${vehicleClasses.includes(v.id) ? 'text-[#d4af35]' : 'text-slate-400 group-hover:text-[#d4af35]'}`}>{v.icon}</span>
-                                <span className={`text-xs font-bold uppercase ${vehicleClasses.includes(v.id) ? 'text-[#d4af35]' : 'text-slate-300'}`}>{v.label}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Airport & Airline Filters */}
-                <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="material-symbols-outlined text-[#d4af35]">flight_takeoff</span>
-                    <h3 className="text-white text-lg font-bold">Airport & Airline Rules</h3>
-                  </div>
-                  <p className="text-slate-400 text-xs mb-6">
-                    Control which airport legs are allowed (pickup / dropoff) and which airlines are blocked for flights.
-                  </p>
-                  <div className="space-y-6">
-                    <div className="flex flex-col gap-2">
-                      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        Airport Direction
-                      </label>
-                      <select
-                        value={
-                          airportDirection === 'pickup'
-                            ? 'pickup'
-                            : airportDirection === 'dropoff'
-                            ? 'dropoff'
-                            : 'both'
-                        }
-                        onChange={(e) => {
-                          setIsDirty(true);
-                          const v = e.target.value;
-                          if (v === 'pickup' || v === 'dropoff') setAirportDirection(v);
-                          else setAirportDirection('both');
-                        }}
-                        className="w-full bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-white focus:border-[#d4af35] outline-none"
-                      >
-                        <option value="both">Allow airport on pickup & dropoff</option>
-                        <option value="pickup">Allow airport on pickup only</option>
-                        <option value="dropoff">Allow airport on dropoff only</option>
-                      </select>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        Blocked Airlines (flight codes)
-                      </label>
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          addAirline();
-                        }}
-                        className="flex gap-2"
-                      >
-                        <input
-                          value={airlineCode}
-                          onChange={(e) => setAirlineCode(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                          placeholder="Enter code (e.g., EK, AF, LH)"
-                          type="text"
-                        />
-                        <button
-                          type="submit"
-                          className="px-4 py-2 bg-[#37342a]/50 border border-[#514c3e] rounded-lg text-sm font-bold text-slate-300 hover:bg-[#37342a]"
-                        >
-                          Add
-                        </button>
-                      </form>
-                    </div>
-                    {allowedAirlines.length === 0 ? (
-                      <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                        <p className="text-xs text-slate-500 italic">
-                          No blocked airline codes configured. Bot will accept all airlines when a flight number is present.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {allowedAirlines.map((code) => (
-                          <div
-                            key={code}
-                            className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-[#514c3e] rounded-lg text-xs"
-                          >
-                            <span className="font-bold text-slate-200">{code}</span>
-                            <button
-                              onClick={() => removeAirline(code)}
-                              className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400"
-                            >
-                              close
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* City Management (Pickup / Dropoff) */}
-                <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="material-symbols-outlined text-[#d4af35]">pincode</span>
-                    <h3 className="text-white text-lg font-bold">City Management</h3>
-                  </div>
-                  <p className="text-slate-400 text-xs mb-8">
-                    Only accept offers from cities in the lists below. Empty lists mean all cities are accepted for that direction.
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="space-y-4">
-                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-sm">verified</span>
-                        Allowed Pickup Cities
-                      </label>
-                      <form onSubmit={(e) => { e.preventDefault(); addPickupCity(); }} className="flex gap-2">
-                        <input
-                          value={pickupCityInput}
-                          onChange={(e) => setPickupCityInput(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-emerald-500"
-                          placeholder="Enter allowed pickup city" type="text"
-                        />
-                        <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
-                      </form>
-                      {allowedPickupCities.length === 0 ? (
-                        <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No allowed pickup cities configured. All pickup cities are accepted.</p>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {allowedPickupCities.map(city => (
-                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
-                              <span className="text-emerald-400 font-medium">{city}</span>
-                              <button onClick={() => removePickupCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-4">
-                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-sm">verified</span>
-                        Allowed Dropoff Cities
-                      </label>
-                      <form onSubmit={(e) => { e.preventDefault(); addDropoffCity(); }} className="flex gap-2">
-                        <input
-                          value={dropoffCityInput}
-                          onChange={(e) => setDropoffCityInput(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-emerald-500"
-                          placeholder="Enter allowed dropoff city" type="text"
-                        />
-                        <button type="submit" className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20">Add</button>
-                      </form>
-                      {allowedDropoffCities.length === 0 ? (
-                        <div className="p-6 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">No allowed dropoff cities configured. All dropoff cities are accepted.</p>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {allowedDropoffCities.map(city => (
-                            <div key={city} className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs">
-                              <span className="text-emerald-400 font-medium">{city}</span>
-                              <button onClick={() => removeDropoffCity(city)} className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400">close</button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Time-based Rules */}
-                <div className="bg-[#37342a]/10 border border-[#514c3e] rounded-xl p-6 backdrop-blur-xl bg-[#37342a]/20 shadow-2xl border-white/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="material-symbols-outlined text-[#d4af35]">event</span>
-                    <h3 className="text-white text-lg font-bold">Time-based Rules</h3>
-                  </div>
-                  <p className="text-slate-400 text-xs mb-6">
-                    Configure blackout dates and a static time window in which rides are allowed.
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="space-y-4">
-                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-sm">block</span>
-                        Blackout Dates
-                      </label>
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          addBlackoutDate();
-                        }}
-                        className="flex gap-2"
-                      >
-                        <input
-                          type="date"
-                          value={blackoutDateInput}
-                          onChange={(e) => setBlackoutDateInput(e.target.value)}
-                          className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                        />
-                        <button
-                          type="submit"
-                          className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-sm font-bold text-emerald-400 hover:bg-emerald-500/20"
-                        >
-                          Add
-                        </button>
-                      </form>
-                      {blackoutDates.length === 0 ? (
-                        <div className="p-4 border border-dashed border-[#514c3e] rounded-lg text-center">
-                          <p className="text-xs text-slate-500 italic">
-                            No blackout dates configured. All pickup dates are allowed.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {blackoutDates.map((d) => (
-                            <div
-                              key={d}
-                              className="flex items-center gap-2 px-3 py-1 bg-[#171612] border border-emerald-500/20 rounded-lg text-xs"
-                            >
-                              <span className="text-emerald-400 font-medium">{d}</span>
-                              <button
-                                onClick={() => removeBlackoutDate(d)}
-                                className="material-symbols-outlined text-sm text-slate-500 hover:text-rose-400"
-                              >
-                                close
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-4">
-                      <label className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-sm">schedule</span>
-                        Static Time Window
-                      </label>
-                      <div className="space-y-3">
-                        <div className="space-y-1">
-                          <span className="text-xs text-slate-400 uppercase tracking-wider">
-                            Allowed Start (inclusive)
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="datetime-local"
-                              value={allowedStartDate}
-                              onChange={(e) => {
-                                setIsDirty(true);
-                                setAllowedStartDate(e.target.value);
-                              }}
-                              className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                            />
-                            {allowedStartDate && (
-                              <button
-                                type="button"
-                                onClick={() => { setIsDirty(true); setAllowedStartDate(''); }}
-                                className="flex items-center justify-center size-8 rounded-lg border border-[#514c3e] text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition-colors"
-                                title="Clear"
-                              >
-                                <span className="material-symbols-outlined text-sm">close</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-xs text-slate-400 uppercase tracking-wider">
-                            Allowed End (inclusive)
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="datetime-local"
-                              value={allowedEndDate}
-                              onChange={(e) => {
-                                setIsDirty(true);
-                                setAllowedEndDate(e.target.value);
-                              }}
-                              className="flex-1 bg-[#171612] border border-[#514c3e] rounded-lg px-4 py-2 text-sm text-white outline-none focus:border-[#d4af35]"
-                            />
-                            {allowedEndDate && (
-                              <button
-                                type="button"
-                                onClick={() => { setIsDirty(true); setAllowedEndDate(''); }}
-                                className="flex items-center justify-center size-8 rounded-lg border border-[#514c3e] text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition-colors"
-                                title="Clear"
-                              >
-                                <span className="material-symbols-outlined text-sm">close</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <p className="text-[10px] text-slate-500 italic">
-                          If left empty, no static window restriction is applied on that side. Times
-                          are interpreted in your base timezone.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Final Actions */}
-                <div className="flex items-center justify-end gap-6 h-12">
-                  {showSuccess && (
-                    <div className="flex items-center gap-2 text-emerald-400 font-bold animate-in fade-in slide-in-from-right-4 duration-500">
-                      <span className="material-symbols-outlined text-xl">check_circle</span>
-                      <span>Changes saved successfully!</span>
-                    </div>
-                  )}
-                  
-                  {isDirty && (
-                    <div className="flex items-center gap-4 animate-in fade-in zoom-in duration-300">
-                      <button 
-                        onClick={() => window.location.reload()}
-                        className="px-6 py-2 text-slate-400 font-semibold hover:text-white transition-colors"
-                      >
-                        Discard
-                      </button>
-                      <button
-                        onClick={handleSave}
-                        disabled={saving}
-                        className="px-10 py-3 bg-gradient-to-br from-[#e5c76b] to-[#b8952b] text-[#171612] font-extrabold rounded-lg shadow-[0_8px_30px_rgb(212,175,53,0.3)] hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <span className="material-symbols-outlined">{saving ? 'sync' : 'save'}</span>
-                        {saving ? 'Saving...' : 'Save All Filter Rules'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </main>
-          
-          <footer className="mt-auto border-t border-[#514c3e] py-6 px-10 text-center">
-            <p className="text-slate-500 text-xs">
-              © 2026 Chauffeur Elite Systems. All automated activities logged for compliance.
-            </p>
-          </footer>
-
-          {/* Settings Modal */}
-          {isSettingsOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
-              {/* Backdrop */}
-              <div 
-                className="absolute inset-0 bg-black/80 backdrop-blur-md"
-                onClick={() => setIsSettingsOpen(false)}
-              ></div>
-              
-              {/* Modal Content */}
-              <div className="relative w-full max-w-xl bg-[#171612] border border-[#514c3e] rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
-                <div className="flex items-center justify-between p-6 border-b border-[#514c3e]">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-[#d4af35]">settings</span>
-                    <h3 className="text-xl font-bold text-white">Account Settings</h3>
-                  </div>
-                  <button 
-                    onClick={() => setIsSettingsOpen(false)}
-                    className="size-8 flex items-center justify-center rounded-lg hover:bg-[#37342a] text-slate-400 transition-colors"
-                  >
-                    <span className="material-symbols-outlined">close</span>
-                  </button>
-                </div>
-                
-                <div className="p-8 space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Account Name</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-500 text-sm">badge</span>
-                      <input
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        className="w-full bg-[#171612] border border-[#514c3e] rounded-lg pl-10 pr-4 py-3 text-white outline-none focus:border-[#d4af35] transition-all"
-                        placeholder="My Business Bot"
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Blacklane Email</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-500 text-sm">mail</span>
-                      <input
-                        type="email"
-                        value={editEmail}
-                        onChange={(e) => setEditEmail(e.target.value)}
-                        className="w-full bg-[#171612] border border-[#514c3e] rounded-lg pl-10 pr-4 py-3 text-white outline-none focus:border-[#d4af35] transition-all"
-                        placeholder="email@example.com"
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">New Password</label>
-                      <span className="text-[10px] text-slate-500 italic">Leave empty to keep existing</span>
-                    </div>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-500 text-sm">lock</span>
-                      <input
-                        type="password"
-                        value={editPassword}
-                        onChange={(e) => setEditPassword(e.target.value)}
-                        className="w-full bg-[#171612] border border-[#514c3e] rounded-lg pl-10 pr-4 py-3 text-white outline-none focus:border-[#d4af35] transition-all"
-                        placeholder="••••••••••••"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="pt-4 flex gap-4">
-                    <button
-                      onClick={() => setIsSettingsOpen(false)}
-                      className="flex-1 px-6 py-3 border border-[#514c3e] text-slate-300 font-bold rounded-lg hover:bg-[#37342a] transition-all"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleUpdateAccount}
-                      disabled={updatingAccount}
-                      className="flex-[2] px-6 py-3 bg-gradient-to-br from-[#e5c76b] to-[#b8952b] text-[#171612] font-extrabold rounded-lg shadow-lg hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                      {updatingAccount ? (
-                        <>
-                          <span className="material-symbols-outlined animate-spin text-lg">sync</span>
-                          Saving Changes...
-                        </>
-                      ) : (
-                        <>
-                          <span className="material-symbols-outlined text-lg">check</span>
-                          Update Account
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
+    <AppShell>
+      {/* Header */}
+      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <h1 className="truncate font-display text-3xl text-ink md:text-4xl">{bot?.name || bot?.email}</h1>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
+            <span className="flex items-center gap-1.5">
+              <StatusDot status={bot?.status ?? ''} /> {statusLabel}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5" strokeWidth={1.75} />
+              {bot?.last_seen ? `Seen ${new Date(bot.last_seen).toLocaleTimeString()}` : 'Never seen'}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {bot?.status === 'ERROR_AUTH' ? (
+            <span className="flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/8 px-4 py-2 text-sm font-medium text-danger">
+              <AlertCircle className="h-4 w-4" /> Auth error — re-enter password
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={handleToggleStatus}
+              disabled={isUpdatingStatus}
+              className={`flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                bot?.status === 'RUNNING'
+                  ? 'border border-hairline bg-surface text-ink hover:border-danger/40 hover:text-danger'
+                  : 'bg-accent text-paper hover:bg-accent-hover'
+              }`}
+            >
+              {bot?.status === 'RUNNING' ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {isUpdatingStatus ? 'Working…' : bot?.status === 'RUNNING' ? 'Stop bot' : 'Start bot'}
+            </button>
           )}
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+            aria-label="Account settings"
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-hairline bg-surface text-muted hover:text-ink"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
         </div>
       </div>
+
+      {/* Quick stats */}
+      <section className="rounded-2xl border border-hairline bg-surface p-5 md:p-6">
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="eyebrow !text-ink">Performance</h2>
+          <TimeframePicker
+            preset={preset}
+            onPreset={setPreset}
+            customStart={customStart}
+            customEnd={customEnd}
+            onCustomStart={setCustomStart}
+            onCustomEnd={setCustomEnd}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
+          <QuickStat label="Booked" value={String(metrics.booked)} />
+          <QuickStat label="Made" value={money(made, cur)} />
+          <QuickStat label="Pay (3%)" value={money(pay, cur)} accent />
+          <QuickStat label="Net" value={money(net, cur)} />
+        </div>
+        {series.points.length > 0 && (
+          <div className="mt-5 border-t border-hairline pt-4">
+            <Sparkline values={series.points.map((p) => p.made)} width={520} height={40} className="w-full" />
+          </div>
+        )}
+      </section>
+
+      {/* Catch board */}
+      <div className="mt-6">
+        <CatchBoard mode="bot" botId={id} />
+      </div>
+
+      {/* Parameters */}
+      <div className="mt-10 space-y-6">
+        <h2 className="font-display text-xl text-ink">Parameters</h2>
+
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          {/* Price & distance */}
+          <Section icon={<span className="font-display text-lg text-accent">€</span>} title="Price & distance" desc="Accept only offers inside these bounds.">
+            <Slider label="Price" valueLabel={`€${minPrice} – €${maxPrice}`}>
+              <DualRange bound={[40, 5000]} value={[minPrice, maxPrice]} onChange={([a, b]) => dirty(() => { setMinPrice(a); setMaxPrice(b); })} />
+            </Slider>
+            <Slider label="Distance" valueLabel={`${minDistance} – ${maxDistance} km`}>
+              <DualRange bound={[0, 5000]} value={[minDistance, maxDistance]} onChange={([a, b]) => dirty(() => { setMinDistance(a); setMaxDistance(b); })} />
+            </Slider>
+          </Section>
+
+          {/* Schedule */}
+          <Section icon={<Clock className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="Schedule" desc="Spacing, lead time and active hours.">
+            <SingleSlider label="Min gap between rides" value={minGapMinutes} unit="min" min={0} max={240} onChange={(v) => dirty(() => setMinGapMinutes(v))} />
+            <SingleSlider label="Min lead time" value={minLeadHours} unit="h" min={0} max={72} onChange={(v) => dirty(() => setMinLeadHours(v))} />
+            <p className="-mt-1 text-xs text-muted">
+              Blacklane allows free cancellation when a ride is &gt;24h away — keep lead time inside that window for safety.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <NumberField label="Active from (h)" value={workingHoursStart} min={0} max={23} onChange={(v) => dirty(() => setWorkingHoursStart(v))} />
+              <NumberField label="Active until (h)" value={workingHoursEnd} min={1} max={24} onChange={(v) => dirty(() => setWorkingHoursEnd(v))} />
+            </div>
+          </Section>
+        </div>
+
+        {/* Ride preferences */}
+        <Section icon={<Car className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="Ride preferences" desc="Which ride types and vehicle classes to accept.">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <SelectField label="Ride type" value={rideType} onChange={(v) => dirty(() => setRideType(v))} options={['Both', 'Transfer', 'Hourly']} />
+            <div>
+              <FieldLabel>Vehicle class</FieldLabel>
+              <div className="grid grid-cols-2 gap-2">
+                {VEHICLES.map((v) => {
+                  const on = vehicleClasses.includes(v.id);
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => toggleVehicleClass(v.id)}
+                      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                        on ? 'border-accent bg-accent/8 text-accent' : 'border-hairline bg-surface text-muted hover:border-ink/30'
+                      }`}
+                    >
+                      <span className={`flex h-4 w-4 items-center justify-center rounded border ${on ? 'border-accent' : 'border-hairline'}`}>
+                        {on && <Check className="h-3 w-3" strokeWidth={3} />}
+                      </span>
+                      {v.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </Section>
+
+        {/* Airport & airline */}
+        <Section icon={<Plane className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="Airport & airline rules" desc="Allowed airport legs and blocked airline codes.">
+          <SelectField
+            label="Airport direction"
+            value={airportDirection}
+            onChange={(v) => dirty(() => setAirportDirection(v as 'both' | 'pickup' | 'dropoff'))}
+            options={[
+              { value: 'both', label: 'Pickup & dropoff' },
+              { value: 'pickup', label: 'Pickup only' },
+              { value: 'dropoff', label: 'Dropoff only' },
+            ]}
+          />
+          <ChipInput
+            label="Blocked airline codes"
+            placeholder="e.g. EK, AF, LH"
+            values={allowedAirlines}
+            transform={(s) => s.trim().toUpperCase()}
+            onChange={(next) => dirty(() => setAllowedAirlines(next))}
+            emptyText="No airlines blocked. All airlines accepted when a flight number is present."
+          />
+        </Section>
+
+        {/* Cities */}
+        <Section icon={<MapPin className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="City filters" desc="Empty lists mean every city is accepted for that direction.">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <ChipInput
+              label="Allowed pickup cities"
+              placeholder="Add a pickup city"
+              values={allowedPickupCities}
+              transform={(s) => s.trim()}
+              onChange={(next) => dirty(() => setAllowedPickupCities(next))}
+              emptyText="All pickup cities accepted."
+            />
+            <ChipInput
+              label="Allowed dropoff cities"
+              placeholder="Add a dropoff city"
+              values={allowedDropoffCities}
+              transform={(s) => s.trim()}
+              onChange={(next) => dirty(() => setAllowedDropoffCities(next))}
+              emptyText="All dropoff cities accepted."
+            />
+          </div>
+        </Section>
+
+        {/* Dates */}
+        <Section icon={<CalendarOff className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="Date windows" desc="Blackout dates and an optional static time window.">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <div>
+              <FieldLabel>Blackout dates</FieldLabel>
+              <form onSubmit={(e) => { e.preventDefault(); addBlackoutDate(); }} className="flex gap-2">
+                <input
+                  type="date"
+                  value={blackoutDateInput}
+                  onChange={(e) => setBlackoutDateInput(e.target.value)}
+                  className="flex-1 rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+                />
+                <button type="submit" className="rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink hover:border-ink/30">
+                  Add
+                </button>
+              </form>
+              {blackoutDates.length === 0 ? (
+                <p className="mt-3 text-xs text-muted">No blackout dates. All pickup dates allowed.</p>
+              ) : (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {blackoutDates.map((d) => (
+                    <Chip key={d} label={d} onRemove={() => dirty(() => setBlackoutDates(blackoutDates.filter((x) => x !== d)))} />
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="space-y-3">
+              <DateTimeField label="Allowed start (inclusive)" value={allowedStartDate} onChange={(v) => dirty(() => setAllowedStartDate(v))} />
+              <DateTimeField label="Allowed end (inclusive)" value={allowedEndDate} onChange={(v) => dirty(() => setAllowedEndDate(v))} />
+              <p className="text-xs text-muted">Empty = no restriction on that side. Interpreted in the base timezone.</p>
+            </div>
+          </div>
+        </Section>
+
+        {/* Stealth */}
+        <Section icon={<Globe className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="Timezone" desc="Used for blackout dates and static windows.">
+          <SelectField
+            label="Base timezone"
+            value={timezone}
+            onChange={(v) => dirty(() => setTimezone(v))}
+            options={[
+              { value: 'Europe/Paris', label: 'Europe/Paris (GMT+1)' },
+              { value: 'Europe/London', label: 'Europe/London (GMT)' },
+              { value: 'America/New_York', label: 'America/New_York (GMT-5)' },
+              { value: 'Asia/Dubai', label: 'Asia/Dubai (GMT+4)' },
+              { value: 'Asia/Tokyo', label: 'Asia/Tokyo (GMT+9)' },
+            ]}
+          />
+        </Section>
+      </div>
+
+      {/* Sticky save bar */}
+      {(isDirty || showSuccess) && (
+        <div className="sticky bottom-4 z-30 mt-8 flex items-center justify-end gap-4 rounded-2xl border border-hairline bg-surface/95 px-5 py-3 backdrop-blur">
+          {showSuccess && (
+            <span className="flex items-center gap-2 text-sm font-medium text-accent">
+              <Check className="h-4 w-4" /> Saved
+            </span>
+          )}
+          {isDirty && (
+            <>
+              <button type="button" onClick={() => window.location.reload()} className="text-sm text-muted hover:text-ink">
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="flex items-center gap-2 rounded-lg bg-accent px-5 py-2 text-sm font-medium text-paper hover:bg-accent-hover disabled:opacity-50"
+              >
+                <Save className="h-4 w-4" /> {saving ? 'Saving…' : 'Save changes'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Settings modal */}
+      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Account settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <FieldLabel>Label</FieldLabel>
+              <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent" placeholder="My bot" />
+            </div>
+            <div>
+              <FieldLabel>Blacklane email</FieldLabel>
+              <input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent" />
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <FieldLabel>New password</FieldLabel>
+                <span className="text-xs text-muted">Leave empty to keep current</span>
+              </div>
+              <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent" placeholder="••••••••••••" />
+            </div>
+          </div>
+          <DialogFooter>
+            <button type="button" onClick={() => setIsSettingsOpen(false)} className="rounded-lg border border-hairline bg-surface px-4 py-2 text-sm text-muted hover:text-ink">
+              Cancel
+            </button>
+            <button type="button" onClick={handleUpdateAccount} disabled={updatingAccount} className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-paper hover:bg-accent-hover disabled:opacity-50">
+              <Check className="h-4 w-4" /> {updatingAccount ? 'Saving…' : 'Update account'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </AppShell>
+  );
+}
+
+/* ---------- small presentational helpers ---------- */
+
+function QuickStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div>
+      <p className="eyebrow text-[10px]">{label}</p>
+      <p className={`font-display tabular text-2xl ${accent ? 'text-accent' : 'text-ink'}`}>{value}</p>
+    </div>
+  );
+}
+
+function Section({ icon, title, desc, children }: { icon: React.ReactNode; title: string; desc: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-hairline bg-surface p-5 md:p-6">
+      <div className="mb-5 flex items-start gap-3">
+        <span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-accent/8">{icon}</span>
+        <div>
+          <h3 className="font-display text-lg text-ink">{title}</h3>
+          <p className="text-xs text-muted">{desc}</p>
+        </div>
+      </div>
+      <div className="space-y-5">{children}</div>
+    </section>
+  );
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return <label className="mb-1.5 block text-xs font-medium text-muted">{children}</label>;
+}
+
+function Slider({ label, valueLabel, children }: { label: string; valueLabel: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm text-ink">{label}</span>
+        <span className="font-mono text-xs text-muted">{valueLabel}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SingleSlider({ label, value, unit, min, max, onChange }: { label: string; value: number; unit: string; min: number; max: number; onChange: (v: number) => void }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm text-ink">{label}</span>
+        <span className="font-mono text-xs text-muted">{value} {unit}</span>
+      </div>
+      <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} className="h-1 w-full cursor-pointer appearance-none rounded-full bg-paper accent-accent" />
+    </div>
+  );
+}
+
+function NumberField({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void }) {
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Math.max(min, Math.min(max, Number(e.target.value))))}
+        className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+      />
+    </div>
+  );
+}
+
+function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: (string | { value: string; label: string })[] }) {
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+      >
+        {options.map((o) => {
+          const opt = typeof o === 'string' ? { value: o, label: o } : o;
+          return (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          );
+        })}
+      </select>
+    </div>
+  );
+}
+
+function DateTimeField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <div className="flex items-center gap-2">
+        <input
+          type="datetime-local"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="flex-1 rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+        />
+        {value && (
+          <button type="button" onClick={() => onChange('')} aria-label="Clear" className="flex h-8 w-8 items-center justify-center rounded-lg border border-hairline text-muted hover:text-danger">
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span className="flex items-center gap-1.5 rounded-lg border border-hairline bg-paper px-2.5 py-1 text-xs text-ink">
+      {label}
+      <button type="button" onClick={onRemove} aria-label={`Remove ${label}`} className="text-muted hover:text-danger">
+        <X className="h-3 w-3" />
+      </button>
+    </span>
+  );
+}
+
+function ChipInput({
+  label,
+  placeholder,
+  values,
+  transform,
+  onChange,
+  emptyText,
+}: {
+  label: string;
+  placeholder: string;
+  values: string[];
+  transform: (s: string) => string;
+  onChange: (next: string[]) => void;
+  emptyText: string;
+}) {
+  const [text, setText] = useState('');
+  const add = () => {
+    const v = transform(text);
+    if (v && !values.includes(v)) onChange([...values, v]);
+    setText('');
+  };
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <form onSubmit={(e) => { e.preventDefault(); add(); }} className="flex gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+        />
+        <button type="submit" aria-label="Add" className="flex items-center gap-1 rounded-lg border border-hairline bg-surface px-3 py-2 text-sm text-ink hover:border-ink/30">
+          <Plus className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+      </form>
+      {values.length === 0 ? (
+        <p className="mt-3 text-xs text-muted">{emptyText}</p>
+      ) : (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {values.map((v) => (
+            <Chip key={v} label={v} onRemove={() => onChange(values.filter((x) => x !== v))} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

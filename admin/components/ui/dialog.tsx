@@ -14,13 +14,11 @@ const Dialog = ({ open, onOpenChange, children }: DialogProps) => {
   return (
     <div className="fixed inset-0 z-50">
       <div
-        className="fixed inset-0 bg-black/70"
+        className="fixed inset-0 bg-ink/30 backdrop-blur-sm"
         onClick={() => onOpenChange(false)}
         aria-hidden="true"
       />
-      <div className="fixed inset-0 flex items-center justify-center p-4">
-        {children}
-      </div>
+      <div className="fixed inset-0 flex items-center justify-center p-4">{children}</div>
     </div>
   );
 };
@@ -28,13 +26,13 @@ const Dialog = ({ open, onOpenChange, children }: DialogProps) => {
 const DialogContent = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement> & { onClose?: () => void }
->(({ className, children, onClose, ...props }, ref) => (
+>(({ className, children, ...props }, ref) => (
   <div
     ref={ref}
     role="dialog"
     aria-modal="true"
     className={cn(
-      'relative z-50 flex max-h-[90vh] w-full max-w-lg min-w-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-2xl',
+      'rise relative z-50 flex max-h-[90vh] w-full max-w-lg min-w-0 flex-col overflow-hidden rounded-2xl border border-hairline bg-surface p-6 shadow-[0_24px_60px_-24px_rgba(22,20,15,0.25)]',
       className
     )}
     onClick={(e) => e.stopPropagation()}
@@ -43,7 +41,6 @@ const DialogContent = React.forwardRef<
     {children}
   </div>
 ));
-
 DialogContent.displayName = 'DialogContent';
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
@@ -51,7 +48,7 @@ const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
 );
 
 const DialogTitle = ({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) => (
-  <h2 className={cn('text-lg font-semibold text-zinc-100', className)} {...props} />
+  <h2 className={cn('font-display text-xl text-ink', className)} {...props} />
 );
 
 const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (

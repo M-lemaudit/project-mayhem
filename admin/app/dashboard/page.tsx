@@ -2,117 +2,60 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase, BILLING_FEE_RATE, type BotRow, type AcceptedOfferRow } from '@/lib/supabase';
+import Link from 'next/link';
+import { Plus, Trash2, ArrowUpRight, Rocket } from 'lucide-react';
+import { supabase, type BotRow, type AcceptedOfferRow } from '@/lib/supabase';
 import { addClient, deleteClient } from '@/app/actions/bots';
-import { LiveSnipeLog } from '@/components/live-snipe-log';
-import { ComingSoonCard } from '@/components/coming-soon-card';
+import { AppShell } from '@/components/app-shell';
+import { Stat } from '@/components/stat';
+import { TimeframePicker } from '@/components/timeframe-picker';
+import { EarningsChart } from '@/components/earnings-chart';
+import { CatchBoard } from '@/components/catch-board';
+import { Sparkline } from '@/components/sparkline';
+import { StatusDot } from '@/components/status-dot';
 import { FullPageLoader } from '@/components/full-page-loader';
+import { rangeFor, money, inRange, type PresetKey } from '@/lib/timeframe';
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+  madePayBooked,
+  bucketSeries,
+  aggregateByBot,
+  primaryCurrency,
+} from '@/lib/metrics';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
-interface NetworkAccount {
-  id: string;
-  providerLabel: string;
-  providerVariant: 'blacklane' | 'sixt' | 'w' | 'generic';
-  statusLabel: 'Active' | 'Standby' | 'Error';
-  title: string;
-  subtitle: string;
-  revenueLabel: string;
-}
+const OFFER_COLUMNS =
+  'id, bot_id, offer_id, price, pickup_at, pickup_address, dropoff_address, created_at, finished_price, finished_currency, completed_at, reconciled_at';
 
-function mapBotToAccount(bot: BotRow, revenueLabel: string): NetworkAccount {
-  const name = bot.name || bot.email;
-  const emailDomain = bot.email.split('@')[1] ?? '';
-  const domain = emailDomain.toLowerCase();
-
-  let providerVariant: NetworkAccount['providerVariant'] = 'generic';
-  let providerLabel = 'ACCOUNT';
-
-  if (domain.includes('blacklane')) {
-    providerVariant = 'blacklane';
-    providerLabel = 'BLACKLANE';
-  } else if (domain.includes('sixt')) {
-    providerVariant = 'sixt';
-    providerLabel = 'SIXT';
-  } else if (domain.includes('wheely') || domain === 'w') {
-    providerVariant = 'w';
-    providerLabel = 'W';
-  } else if (domain) {
-    providerLabel = domain.split('.')[0]?.toUpperCase() || 'ACCOUNT';
-  }
-
-  const statusLabel: NetworkAccount['statusLabel'] =
-    bot.status === 'RUNNING'
-      ? 'Active'
-      : bot.status === 'ERROR_AUTH'
-      ? 'Error'
-      : 'Standby';
-
-  return {
-    id: bot.id,
-    providerLabel,
-    providerVariant,
-    statusLabel,
-    title: name,
-    subtitle: 'Premium fleet account',
-    revenueLabel,
-  };
-}
-
-/** Current-month 3% fee per bot, formatted (or '—' when nothing reconciled yet). */
-function computeRevenueByBot(offers: AcceptedOfferRow[]): Record<string, string> {
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
-  const monthStartMs = monthStart.getTime();
-
-  const agg = new Map<string, { fee: number; currency: string }>();
-  for (const o of offers) {
-    if (!o.completed_at || !o.reconciled_at) continue;
-    if (new Date(o.completed_at).getTime() < monthStartMs) continue;
-    const price = o.finished_price ?? 0;
-    const cur = agg.get(o.bot_id) ?? { fee: 0, currency: o.finished_currency || 'USD' };
-    cur.fee += price * BILLING_FEE_RATE;
-    agg.set(o.bot_id, cur);
-  }
-
-  const out: Record<string, string> = {};
-  for (const [botId, v] of Array.from(agg.entries())) {
-    try {
-      out[botId] = new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: v.currency,
-      }).format(v.fee);
-    } catch {
-      out[botId] = `${v.fee.toFixed(2)} ${v.currency}`;
-    }
-  }
-  return out;
+function timeAgo(iso?: string): string {
+  if (!iso) return 'No catches yet';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return 'Just now';
+  const m = s / 60;
+  if (m < 60) return `${Math.floor(m)}m ago`;
+  const h = m / 60;
+  if (h < 24) return `${Math.floor(h)}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 export default function DashboardPage() {
   const router = useRouter();
   const [bots, setBots] = useState<BotRow[]>([]);
-  const [revenueByBot, setRevenueByBot] = useState<Record<string, string>>({});
+  const [offers, setOffers] = useState<AcceptedOfferRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Add Account Modal states
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [preset, setPreset] = useState<PresetKey>('this_month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
+  // Add-account modal
+  const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [isAdding, setIsAdding] = useState(false);
-  const [botToDelete, setBotToDelete] = useState<NetworkAccount | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [toDelete, setToDelete] = useState<{ id: string; name: string } | null>(null);
 
-  const fetchBots = async () => {
-    // Data isolation: only ever load the bots owned by the signed-in user.
-    // RLS is currently permissive, so this client-side scope is what prevents
-    // one account from seeing another account's bots in the dashboard.
+  const fetchAll = async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -120,85 +63,78 @@ export default function DashboardPage() {
       router.push('/login');
       return;
     }
-    const { data, error } = await supabase
+    const { data: botData } = await supabase
       .from('bots')
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
-    if (error) {
-      console.error('Failed to fetch bots', {
-        errorMessage: error.message,
-        errorStack: 'stack' in error && typeof error.stack === 'string' ? error.stack : undefined,
-      });
-      return;
-    }
-    const botList = (data as BotRow[]) ?? [];
+    const botList = (botData as BotRow[]) ?? [];
     setBots(botList);
 
-    // Current-month billing per bot for the "Current Revenue" card.
     if (botList.length > 0) {
-      const { data: offers, error: offerErr } = await supabase
+      const { data: offerData } = await supabase
         .from('accepted_offers')
-        .select('bot_id, finished_price, finished_currency, completed_at, reconciled_at')
-        .in(
-          'bot_id',
-          botList.map((b) => b.id)
-        )
-        .not('reconciled_at', 'is', null);
-      if (offerErr) {
-        console.error('Failed to fetch billing', { errorMessage: offerErr.message });
-      } else {
-        setRevenueByBot(computeRevenueByBot((offers as AcceptedOfferRow[]) ?? []));
-      }
+        .select(OFFER_COLUMNS)
+        .in('bot_id', botList.map((b) => b.id))
+        .order('created_at', { ascending: false })
+        .limit(3000);
+      setOffers((offerData as AcceptedOfferRow[]) ?? []);
+    } else {
+      setOffers([]);
     }
   };
 
   useEffect(() => {
-    fetchBots().finally(() => setLoading(false));
+    fetchAll().finally(() => setLoading(false));
     const channel = supabase
-      .channel('bots-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bots' }, () => {
-        fetchBots();
-      })
+      .channel('dashboard-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bots' }, fetchAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'accepted_offers' }, fetchAll)
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const confirmDeleteBot = (account: NetworkAccount) => {
-    setBotToDelete(account);
-  };
+  const range = useMemo(() => rangeFor(preset, customStart, customEnd), [preset, customStart, customEnd]);
+  const metrics = useMemo(() => madePayBooked(offers, range), [offers, range]);
+  const series = useMemo(() => bucketSeries(offers, range), [offers, range]);
+  const byBot = useMemo(() => aggregateByBot(offers, range), [offers, range]);
+  const botsById = useMemo(
+    () => bots.reduce<Record<string, BotRow>>((a, b) => ((a[b.id] = b), a), {}),
+    [bots]
+  );
 
-  const handleConfirmDelete = async () => {
-    if (!botToDelete) return;
-    const result = await deleteClient(botToDelete.id);
-    if ((result as any)?.error) {
-      alert('Failed to delete account: ' + (result as any).error);
-      return;
+  // Bookings per active day, for the small sparkline under "Rides booked".
+  const bookedBars = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of offers) {
+      if (o.created_at && inRange(new Date(o.created_at).getTime(), range)) {
+        const k = o.created_at.slice(0, 10);
+        m.set(k, (m.get(k) ?? 0) + 1);
+      }
     }
+    return Array.from(m.entries())
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([, v]) => v)
+      .slice(-30);
+  }, [offers, range]);
 
-    // Optimistic update + full refresh from Supabase
-    setBots((prev) => prev.filter((b) => b.id !== botToDelete.id));
-    setBotToDelete(null);
-    fetchBots();
-  };
+  const cur = primaryCurrency(metrics.byCurrency);
+  const main = metrics.byCurrency.find((c) => c.currency === cur);
+  const made = main?.made ?? 0;
+  const pay = main?.pay ?? 0;
+  const completed = main?.completed ?? 0;
+  const net = made - pay;
+  const avg = completed > 0 ? made / completed : 0;
+  const extraCurrencies = metrics.byCurrency.filter((c) => c.currency !== cur);
+  const activeBots = bots.filter((b) => b.status === 'RUNNING').length;
+  const maxBotMade = Math.max(1, ...Object.values(byBot).map((b) => b.made));
 
-  const handleLogout = async () => {
-    const { createClient } = await import('@/lib/supabase/client');
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push('/login');
-    router.refresh();
-  };
-
-  const handleCreateAccount = async () => {
-    if (!newEmail || !newPassword) {
-      alert('Email and Password are required');
-      return;
-    }
-
-    setIsAdding(true);
+  const handleCreate = async () => {
+    if (!newEmail || !newPassword) return;
+    setAdding(true);
     try {
       const result = await addClient({
         name: newName,
@@ -211,380 +147,275 @@ export default function DashboardPage() {
         latitude: 48.8566,
         longitude: 2.3522,
       });
-
-      if (result.error) {
-        alert('Failed to create account: ' + result.error);
-      } else if (result.data) {
-        router.push(`/accounts/${result.data.id}`);
-      }
-    } catch (err) {
-      alert('An error occurred');
-      console.error('Dashboard action failed', {
-        errorMessage: err instanceof Error ? err.message : String(err),
-        errorStack: err instanceof Error ? err.stack : undefined,
-      });
+      if (result.error) alert('Could not create account: ' + result.error);
+      else if (result.data) router.push(`/accounts/${result.data.id}`);
     } finally {
-      setIsAdding(false);
+      setAdding(false);
     }
   };
 
-  const activeBots = bots.filter((b) => b.status === 'RUNNING').length;
-  const accounts: NetworkAccount[] = bots.map((bot) =>
-    mapBotToAccount(bot, revenueByBot[bot.id] ?? '—')
-  );
-  const botsById = useMemo(
-    () =>
-      bots.reduce<Record<string, BotRow>>((acc, bot) => {
-        acc[bot.id] = bot;
-        return acc;
-      }, {}),
-    [bots]
-  );
+  const handleDelete = async () => {
+    if (!toDelete) return;
+    const result = await deleteClient(toDelete.id);
+    if ((result as { error?: string })?.error) {
+      alert('Could not delete account: ' + (result as { error?: string }).error);
+      return;
+    }
+    setBots((prev) => prev.filter((b) => b.id !== toDelete.id));
+    setToDelete(null);
+    fetchAll();
+  };
 
-  if (loading) {
-    return <FullPageLoader message="Loading executive dashboard…" />;
-  }
+  if (loading) return <FullPageLoader message="Loading your fleet desk…" />;
 
   return (
-    <main className="min-h-screen bg-[#0a0a0a] text-slate-100 font-[Inter,sans-serif]">
-      {/* Top Header (from Stitch design) */}
-      <header className="border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-[1440px] mx-auto px-6 h-20 flex items-center justify-between">
-          {/* Brand */}
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-[#d4af35] text-3xl">
-              directions_car
-            </span>
-            <h1 className="text-xl font-light tracking-luxury uppercase text-slate-100">
-              Chauffeur <span className="font-bold">Elite</span>
-            </h1>
-          </div>
-          {/* Search + user */}
-          <div className="flex items-center gap-8">
-            <div className="relative w-64 group">
-              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xl group-focus-within:text-[#d4af35] transition-colors">
-                search
-              </span>
-              <input
-                type="text"
-                placeholder="Search accounts..."
-                className="w-full bg-[#141414] border border-[#262626] rounded-lg pl-10 pr-4 py-2 text-sm focus:ring-1 focus:ring-[#d4af35] focus:border-[#d4af35] transition-all placeholder:text-slate-600"
-              />
-            </div>
-            <div className="flex items-center gap-4">
-              <button
-                className="px-4 py-2 rounded-lg border border-[#262626] bg-[#141414] text-xs font-semibold text-slate-300 hover:bg-[#262626] hover:text-[#d4af35] transition-colors flex items-center gap-2"
-                onClick={() => router.push('/billing')}
-              >
-                <span className="material-symbols-outlined text-base">receipt_long</span>
-                Billing
-              </button>
-              <button
-                className="px-4 py-2 rounded-lg border border-[#262626] bg-[#141414] text-xs font-semibold text-slate-300 hover:bg-[#262626] hover:text-[#d4af35] transition-colors"
-                onClick={handleLogout}
-              >
-                Log out
-              </button>
-            </div>
-          </div>
+    <AppShell>
+      {/* Title + timeframe */}
+      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 className="font-display text-3xl text-ink md:text-4xl">Overview</h1>
+          <p className="mt-1 text-sm text-muted">
+            {bots.length} bot{bots.length === 1 ? '' : 's'} · {activeBots} active
+          </p>
         </div>
-      </header>
+        <TimeframePicker
+          preset={preset}
+          onPreset={setPreset}
+          customStart={customStart}
+          customEnd={customEnd}
+          onCustomStart={setCustomStart}
+          onCustomEnd={setCustomEnd}
+        />
+      </div>
 
-      <main className="max-w-[1440px] mx-auto w-full p-8 flex-1 mesh-gradient">
-        {/* Header text + static metrics copied from Stitch */}
-        <div className="mb-10 flex items-end justify-between">
-          <div>
-            <h2 className="text-4xl font-light tracking-tight text-slate-100">
-              Executive Dashboard
-            </h2>
-            <p className="text-slate-500 mt-1">
-              Real-time performance across your global fleet networks.
+      {/* Hero stats */}
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-hairline bg-hairline lg:grid-cols-4">
+        <div className="bg-surface p-5 md:p-6">
+          <Stat
+            label="You made"
+            value={money(made, cur)}
+            sub={`${completed} completed ride${completed === 1 ? '' : 's'}`}
+          />
+          {extraCurrencies.length > 0 && (
+            <p className="mt-1 text-xs text-muted">
+              + {extraCurrencies.map((c) => money(c.made, c.currency)).join(' · ')}
             </p>
-          </div>
-          <div className="flex gap-3">
-            <button
-              className="px-5 py-2.5 bg-[#141414] border border-[#262626] text-slate-500 rounded-lg text-sm font-medium flex items-center gap-2 cursor-not-allowed opacity-60"
-              disabled
-            >
-              <span className="material-symbols-outlined text-lg">calendar_today</span>
-              Last 30 Days
-            </button>
-            <button
-              className="px-5 py-2.5 bg-[#262626] text-slate-500 rounded-lg text-sm font-bold flex items-center gap-2 cursor-not-allowed opacity-60"
-              disabled
-            >
-              <span className="material-symbols-outlined text-lg">download</span>
-              Export Report
-            </button>
-          </div>
+          )}
         </div>
-
-        {/* Live Snipe Log (global) */}
-        <div className="mb-12">
-          <LiveSnipeLog mode="global" botsById={botsById} />
+        <div className="bg-surface p-5 md:p-6">
+          <Stat label="You pay (3%)" value={money(pay, cur)} sub="Service fee" accent />
         </div>
-
-        {/* Network Accounts (dynamic) */}
-        <section className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xl font-light tracking-luxury uppercase text-slate-400 tracking-ultra-wide">
-              Network Accounts
-            </h3>
-            <div className="flex gap-2">
-              <button className="p-2 text-slate-500 hover:text-slate-100">
-                <span className="material-symbols-outlined">grid_view</span>
-              </button>
-              <button className="p-2 text-slate-500 hover:text-slate-100">
-                <span className="material-symbols-outlined">list</span>
-              </button>
+        <div className="bg-surface p-5 md:p-6">
+          <Stat label="Rides booked" value={String(metrics.booked)} sub="Caught this period">
+            <div className="mt-2">
+              <Sparkline values={bookedBars} variant="bars" width={120} height={24} />
             </div>
+          </Stat>
+        </div>
+        <div className="bg-surface p-5 md:p-6">
+          <Stat
+            label="Net earnings"
+            value={money(net, cur)}
+            sub={avg > 0 ? `${money(avg, cur)} avg / ride` : 'After 3% fee'}
+          />
+        </div>
+      </div>
+
+      {/* Earnings chart */}
+      <section className="mt-6 rounded-2xl border border-hairline bg-surface p-5 md:p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="eyebrow !text-ink">Earnings</h2>
+          <div className="flex items-center gap-4 text-[11px] text-muted">
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-accent" /> Made
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-0 w-3 border-t border-dashed border-muted" /> Pay
+            </span>
           </div>
+        </div>
+        <EarningsChart points={series.points} currency={series.currency} />
+      </section>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {accounts.map((account) => (
-              <div
-                key={account.id}
-                className="glass-card p-6 rounded-2xl transition-all duration-300 group"
-              >
-                <div className="flex justify-between items-start mb-6">
-                  {/* Provider logo variant */}
-                  {account.providerVariant === 'blacklane' && (
-                    <div className="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center overflow-hidden">
-                      <div className="bg-white text-black font-black text-[8px] p-0.5">
-                        {account.providerLabel}
-                      </div>
-                    </div>
-                  )}
-                  {account.providerVariant === 'sixt' && (
-                    <div className="w-10 h-10 rounded-lg bg-[#FF5F00] flex items-center justify-center">
-                      <span className="text-white font-black text-[9px]">
-                        {account.providerLabel}
-                      </span>
-                    </div>
-                  )}
-                  {account.providerVariant === 'w' && (
-                    <div className="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center">
-                      <span className="text-slate-100 font-serif italic text-base">
-                        {account.providerLabel}
-                      </span>
-                    </div>
-                  )}
-                  {account.providerVariant === 'generic' && (
-                    <div className="w-10 h-10 rounded-lg bg-black border border-white/10 flex items-center justify-center overflow-hidden">
-                      <div className="bg-white text-black font-black text-[8px] px-1 py-0.5">
-                        {account.providerLabel}
-                      </div>
-                    </div>
-                  )}
+      {/* Catch board */}
+      <div className="mt-6">
+        <CatchBoard mode="global" botsById={botsById} />
+      </div>
 
-                  {/* Actions: status pill + delete */}
+      {/* Fleet */}
+      <section className="mt-10">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-display text-xl text-ink">Fleet</h2>
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            className="flex items-center gap-2 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-sm text-ink transition-colors hover:border-ink/30"
+          >
+            <Plus className="h-4 w-4" strokeWidth={1.75} /> Add bot
+          </button>
+        </div>
+
+        {bots.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-hairline bg-surface p-10 text-center">
+            <p className="text-sm text-muted">No bots yet. Add your first account to start catching rides.</p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-hairline bg-surface">
+            {bots.map((bot) => {
+              const agg = byBot[bot.id] ?? { made: 0, pay: 0, booked: 0, currency: cur };
+              return (
+                <div
+                  key={bot.id}
+                  className="group flex items-center gap-4 border-b border-hairline px-5 py-4 last:border-0 hover:bg-paper md:px-6"
+                >
+                  <Link href={`/accounts/${bot.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+                    <StatusDot status={bot.status} />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-ink">{bot.name || bot.email}</p>
+                      <p className="truncate text-xs text-muted">{timeAgo(agg.lastCatch)}</p>
+                    </div>
+                  </Link>
+
+                  {/* Contribution bar */}
+                  <div className="hidden w-24 md:block">
+                    <div className="h-1.5 overflow-hidden rounded-full bg-paper">
+                      <div
+                        className="h-full rounded-full bg-accent"
+                        style={{ width: `${Math.round((agg.made / maxBotMade) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="hidden w-20 text-right md:block">
+                    <p className="eyebrow text-[10px]">Booked</p>
+                    <p className="font-mono text-sm text-ink">{agg.booked}</p>
+                  </div>
+                  <div className="w-28 text-right">
+                    <p className="eyebrow text-[10px]">Made</p>
+                    <p className="font-display tabular text-sm text-ink">{money(agg.made, agg.currency)}</p>
+                  </div>
+                  <div className="hidden w-24 text-right sm:block">
+                    <p className="eyebrow text-[10px]">Pay</p>
+                    <p className="font-display tabular text-sm text-accent">{money(agg.pay, agg.currency)}</p>
+                  </div>
+
                   <div className="flex items-center gap-2">
-                    {account.statusLabel === 'Active' ? (
-                      <span className="px-2 py-0.5 bg-emerald-500/5 text-emerald-500 text-[9px] font-bold rounded-full uppercase tracking-widest border border-emerald-500/10">
-                        Active
-                      </span>
-                    ) : account.statusLabel === 'Error' ? (
-                      <span className="px-2 py-0.5 bg-rose-500/10 text-rose-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-rose-500/30">
-                        Error
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 bg-slate-500/10 text-slate-400 text-[9px] font-bold rounded-full uppercase tracking-widest border border-white/10">
-                        Standby
-                      </span>
-                    )}
+                    <Link
+                      href={`/accounts/${bot.id}`}
+                      className="text-muted transition-colors group-hover:text-accent"
+                      aria-label="Open bot"
+                    >
+                      <ArrowUpRight className="h-4 w-4" />
+                    </Link>
                     <button
                       type="button"
-                      onClick={() => confirmDeleteBot(account)}
-                      className="ml-1 flex items-center justify-center w-7 h-7 rounded-full border border-rose-500/40 bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white transition-colors text-[16px]"
-                      aria-label="Delete account"
+                      onClick={() => setToDelete({ id: bot.id, name: bot.name || bot.email })}
+                      aria-label="Delete bot"
+                      className="text-muted/50 transition-colors hover:text-danger"
                     >
-                      <span className="material-symbols-outlined text-[18px]">delete</span>
+                      <Trash2 className="h-4 w-4" strokeWidth={1.75} />
                     </button>
                   </div>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => router.push(`/accounts/${account.id}`)}
-                  className="text-left w-full"
-                >
-                  <h4 className="text-base font-semibold text-slate-100 group-hover:text-[#d4af35] transition-colors">
-                    {account.title}
-                  </h4>
-                  <p className="text-xs text-slate-500 mt-1 mb-6">{account.subtitle}</p>
-                </button>
-
-                <div className="flex items-center justify-between pt-4 border-t border-white/5">
-                  <div>
-                    <p className="text-[9px] uppercase tracking-ultra-wide text-slate-600 mb-1">
-                      Current Revenue
-                    </p>
-                    <p className="text-sm font-medium text-slate-200">
-                      {account.revenueLabel}
-                    </p>
-                  </div>
-                  <span className="material-symbols-outlined text-slate-600 group-hover:text-[#d4af35] group-hover:translate-x-1 transition-all">
-                    arrow_forward
-                  </span>
-                </div>
-              </div>
-            ))}
-
-            {/* Add Account card (static, from design) */}
-            <button
-              type="button"
-              className="border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center p-8 hover:border-[#d4af35]/40 hover:bg-[#d4af35]/5 transition-all duration-500 cursor-pointer group"
-              onClick={() => setIsAddModalOpen(true)}
-            >
-              <div className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-4 group-hover:bg-[#d4af35] group-hover:scale-110 transition-all duration-500">
-                <span className="material-symbols-outlined text-slate-400 group-hover:text-black font-light">
-                  add
-                </span>
-              </div>
-              <p className="text-sm font-semibold text-slate-400 group-hover:text-slate-100 transition-colors uppercase tracking-widest">
-                Add Account
-              </p>
-              <p className="text-[10px] text-slate-600 mt-2 font-medium">Connect via API</p>
-            </button>
+              );
+            })}
           </div>
-        </section>
+        )}
+      </section>
 
-      </main>
-
-      {/* Delete account confirmation modal */}
-      <Dialog open={!!botToDelete} onOpenChange={(open) => !open && setBotToDelete(null)}>
+      {/* Add account dialog */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete account</DialogTitle>
+            <DialogTitle>Add a bot</DialogTitle>
+            <p className="mt-1 text-sm text-muted">Connect a Blacklane account to start catching rides.</p>
           </DialogHeader>
-          <p className="text-sm text-zinc-300">
-            Are you sure you want to delete{' '}
-            <span className="font-semibold text-white">
-              {botToDelete?.title || botToDelete?.providerLabel}
-            </span>{' '}
-            and all of its settings? This action cannot be undone.
-          </p>
+          <div className="space-y-4">
+            <Field label="Label">
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. Paris Fleet"
+                className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent"
+              />
+            </Field>
+            <Field label="Blacklane email">
+              <input
+                type="email"
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="connect@blacklane.com"
+                className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent"
+              />
+            </Field>
+            <Field label="Password">
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="••••••••••••"
+                className="w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-sm text-ink outline-none focus:border-accent"
+              />
+            </Field>
+          </div>
           <DialogFooter>
             <button
               type="button"
-              onClick={() => setBotToDelete(null)}
-              className="px-4 py-2 rounded-md border border-zinc-600 bg-zinc-900 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors"
+              onClick={() => setAddOpen(false)}
+              className="rounded-lg border border-hairline bg-surface px-4 py-2 text-sm text-muted hover:text-ink"
             >
               Cancel
             </button>
             <button
               type="button"
-              onClick={handleConfirmDelete}
-              className="px-4 py-2 rounded-md bg-rose-600 text-sm font-semibold text-white hover:bg-rose-500 transition-colors"
+              onClick={handleCreate}
+              disabled={adding || !newEmail || !newPassword}
+              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-paper hover:bg-accent-hover disabled:opacity-50"
             >
-              Delete account
+              <Rocket className="h-4 w-4" strokeWidth={1.75} />
+              {adding ? 'Connecting…' : 'Add bot'}
             </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Add Account Modal */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
-          {/* Backdrop */}
-          <div 
-            className="absolute inset-0 bg-black/90 backdrop-blur-xl"
-            onClick={() => setIsAddModalOpen(false)}
-          ></div>
-          
-          {/* Modal Content */}
-          <div className="relative w-full max-w-lg bg-[#0f0f0f] border border-neutral-800 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] overflow-hidden animate-in zoom-in-95 duration-300">
-            <div className="p-8 border-b border-neutral-900 bg-gradient-to-b from-[#141414] to-transparent">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-3">
-                  <div className="size-10 rounded-xl bg-[#d4af35]/10 border border-[#d4af35]/20 flex items-center justify-center">
-                    <span className="material-symbols-outlined text-[#d4af35]">person_add</span>
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-white tracking-tight">Add New Account</h3>
-                    <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">Configure fleet connection</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="size-10 flex items-center justify-center rounded-xl hover:bg-neutral-800 text-slate-500 hover:text-white transition-all"
-                >
-                  <span className="material-symbols-outlined">close</span>
-                </button>
-              </div>
-            </div>
-            
-            <div className="p-8 space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Account Label</label>
-                <div className="relative group">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-600 text-xl group-focus-within:text-[#d4af35] transition-colors">badge</span>
-                  <input
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    className="w-full bg-[#141414] border border-[#262626] rounded-xl pl-12 pr-4 py-4 text-white outline-none focus:border-[#d4af35] focus:ring-1 focus:ring-[#d4af35] transition-all placeholder:text-slate-700"
-                    placeholder="e.g. London Elite Fleet"
-                  />
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Blacklane Email</label>
-                <div className="relative group">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-600 text-xl group-focus-within:text-[#d4af35] transition-colors">mail</span>
-                  <input
-                    type="email"
-                    value={newEmail}
-                    onChange={(e) => newEmail !== e.target.value && setNewEmail(e.target.value)}
-                    className="w-full bg-[#141414] border border-[#262626] rounded-xl pl-12 pr-4 py-4 text-white outline-none focus:border-[#d4af35] focus:ring-1 focus:ring-[#d4af35] transition-all placeholder:text-slate-700"
-                    placeholder="connect@blacklane.com"
-                  />
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Bot Access Password</label>
-                <div className="relative group">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-600 text-xl group-focus-within:text-[#d4af35] transition-colors">lock</span>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full bg-[#141414] border border-[#262626] rounded-xl pl-12 pr-4 py-4 text-white outline-none focus:border-[#d4af35] focus:ring-1 focus:ring-[#d4af35] transition-all placeholder:text-slate-700"
-                    placeholder="••••••••••••"
-                  />
-                </div>
-              </div>
+      {/* Delete confirm */}
+      <Dialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete bot</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted">
+            Delete <span className="font-medium text-ink">{toDelete?.name}</span> and all its settings? This
+            cannot be undone.
+          </p>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setToDelete(null)}
+              className="rounded-lg border border-hairline bg-surface px-4 py-2 text-sm text-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleDelete}
+              className="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+            >
+              Delete
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </AppShell>
+  );
+}
 
-              <div className="pt-4 flex gap-4">
-                <button
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="flex-1 px-6 py-4 border border-[#262626] text-slate-400 font-bold rounded-xl hover:bg-neutral-800 hover:text-white transition-all uppercase tracking-widest text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCreateAccount}
-                  disabled={isAdding || !newEmail || !newPassword}
-                  className="flex-[2] px-6 py-4 bg-gradient-to-br from-[#e5c76b] to-[#b8952b] text-black font-black rounded-xl shadow-xl shadow-[#d4af35]/10 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:grayscale uppercase tracking-widest text-xs"
-                >
-                  {isAdding ? (
-                    <>
-                      <span className="material-symbols-outlined animate-spin text-lg">sync</span>
-                      Connecting...
-                    </>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined text-xl">rocket_launch</span>
-                      Launch Account
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </main>
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-xs font-medium text-muted">{label}</label>
+      {children}
+    </div>
   );
 }
