@@ -618,6 +618,8 @@ export class SniperLoop {
                           pickup_at: pickupAt || null,
                           pickup_address: typeof pickupAddr === 'string' ? pickupAddr : null,
                           dropoff_address: typeof dropoffAddr === 'string' ? dropoffAddr : null,
+                          // Full JSON:API payload of the accepted offer (offer + its related resources).
+                          raw_offer: { data: offer, included },
                         },
                         { onConflict: 'bot_id,offer_id' }
                       );
