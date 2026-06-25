@@ -1,10 +1,10 @@
 /**
  * Money + ride aggregation shared by the dashboard and bot-detail pages.
  *
- * Two distinct concepts, deliberately kept apart:
- *  - "booked"   — an accepted offer (created_at = when the bot caught it).
- *  - "made/pay" — only rides that completed on Blacklane and were reconciled
- *                 (finished_price is the authoritative billing base; pay = 3%).
+ * "made" = the full value of every ride the bot booked in the timeframe
+ * (Σ booked price, keyed on created_at = when the bot caught it). We bill 3%
+ * of that. finished_price/reconciliation only refines a ride once it completes;
+ * it does NOT gate whether a booking counts toward the headline.
  */
 import { BILLING_FEE_RATE, type AcceptedOfferRow } from '@/lib/supabase';
 import type { Range } from '@/lib/timeframe';
@@ -12,32 +12,51 @@ import { inRange } from '@/lib/timeframe';
 
 export interface MoneyByCurrency {
   currency: string;
-  made: number; // gross earnings (Σ finished_price)
+  made: number; // gross booked value (Σ price)
   pay: number; // 3% fee
-  completed: number; // billable ride count
+  completed: number; // booked ride count
 }
 
 export interface Metrics {
   booked: number; // accepted offers created in range
-  byCurrency: MoneyByCurrency[]; // completed/billed, split by currency
+  byCurrency: MoneyByCurrency[]; // booked value, split by currency
 }
 
-function isBillable(o: AcceptedOfferRow): boolean {
-  return Boolean(o.reconciled_at && o.completed_at);
+/** Booked fare as a number — `price` is a plain numeric string (e.g. "251.35"). */
+function bookedAmount(o: AcceptedOfferRow): number {
+  if (o.price == null) return 0;
+  const n = Number(String(o.price).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n : 0;
 }
 
-/** Headline figures for a timeframe: bookings + made/pay grouped by currency. */
+/**
+ * Booked rows carry no currency (only reconciled rows get finished_currency),
+ * so we attribute every booking to the fleet's dominant currency, defaulting
+ * to EUR when nothing has reconciled yet.
+ */
+function dominantCurrency(offers: AcceptedOfferRow[]): string {
+  const counts = new Map<string, number>();
+  for (const o of offers) {
+    if (o.finished_currency) counts.set(o.finished_currency, (counts.get(o.finished_currency) ?? 0) + 1);
+  }
+  let best = 'EUR';
+  let bestN = 0;
+  for (const [c, n] of Array.from(counts.entries())) if (n > bestN) ((best = c), (bestN = n));
+  return best;
+}
+
+/** Headline figures for a timeframe: booked count + booked value/pay grouped by currency. */
 export function madePayBooked(offers: AcceptedOfferRow[], range: Range): Metrics {
   let booked = 0;
+  const fallback = dominantCurrency(offers);
   const byCur = new Map<string, MoneyByCurrency>();
 
   for (const o of offers) {
-    if (o.created_at && inRange(new Date(o.created_at).getTime(), range)) booked += 1;
+    if (!o.created_at || !inRange(new Date(o.created_at).getTime(), range)) continue;
+    booked += 1;
 
-    if (!isBillable(o)) continue;
-    if (!inRange(new Date(o.completed_at as string).getTime(), range)) continue;
-    const currency = o.finished_currency || 'EUR';
-    const price = o.finished_price ?? 0;
+    const currency = o.finished_currency || fallback;
+    const price = bookedAmount(o);
     const agg = byCur.get(currency) ?? { currency, made: 0, pay: 0, completed: 0 };
     agg.made += price;
     agg.pay += price * BILLING_FEE_RATE;
@@ -49,7 +68,7 @@ export function madePayBooked(offers: AcceptedOfferRow[], range: Range): Metrics
   return { booked, byCurrency };
 }
 
-/** The currency carrying the most completed rides in a set (defaults to EUR). */
+/** The currency carrying the most booked rides in a set (defaults to EUR). */
 export function primaryCurrency(byCurrency: MoneyByCurrency[]): string {
   if (byCurrency.length === 0) return 'EUR';
   return byCurrency.reduce((a, b) => (b.completed > a.completed ? b : a)).currency;
@@ -92,20 +111,25 @@ function labelFor(d: Date, g: Granularity): string {
 /**
  * Continuous time series of made/pay/count for the chart, in the primary
  * currency only (mixing currencies on one axis would be meaningless). Empty
- * buckets are included so the line reads as a real timeline.
+ * buckets are included so the line reads as a real timeline. Keyed on the
+ * booking date (created_at) so it tracks the full booked value, not just
+ * reconciled rides.
  */
 export function bucketSeries(offers: AcceptedOfferRow[], range: Range): {
   points: SeriesPoint[];
   currency: string;
 } {
-  const billable = offers.filter(
-    (o) => isBillable(o) && inRange(new Date(o.completed_at as string).getTime(), range)
-  );
+  const fallback = dominantCurrency(offers);
   const currency = primaryCurrency(madePayBooked(offers, range).byCurrency);
-  const inCur = billable.filter((o) => (o.finished_currency || 'EUR') === currency);
+  const inCur = offers.filter(
+    (o) =>
+      o.created_at &&
+      inRange(new Date(o.created_at).getTime(), range) &&
+      (o.finished_currency || fallback) === currency
+  );
   if (inCur.length === 0) return { points: [], currency };
 
-  const times = inCur.map((o) => new Date(o.completed_at as string).getTime());
+  const times = inCur.map((o) => new Date(o.created_at).getTime());
   const [rs, re] = range;
   const now = Date.now();
   const minTs = Math.min(...times);
@@ -132,10 +156,10 @@ export function bucketSeries(offers: AcceptedOfferRow[], range: Range): {
   }
 
   for (const o of inCur) {
-    const key = keyer(new Date(o.completed_at as string)).toISOString().slice(0, 10);
+    const key = keyer(new Date(o.created_at)).toISOString().slice(0, 10);
     const p = buckets.get(key);
     if (!p) continue;
-    const price = o.finished_price ?? 0;
+    const price = bookedAmount(o);
     p.made += price;
     p.pay += price * BILLING_FEE_RATE;
     p.count += 1;
@@ -153,17 +177,16 @@ export function aggregateByBot(
     string,
     { made: number; pay: number; booked: number; currency: string; lastCatch?: string }
   > = {};
+  const fallback = dominantCurrency(offers);
   for (const o of offers) {
-    const row = (out[o.bot_id] ??= { made: 0, pay: 0, booked: 0, currency: 'EUR' });
-    if (o.created_at && inRange(new Date(o.created_at).getTime(), range)) {
-      row.booked += 1;
-      if (!row.lastCatch || o.created_at > row.lastCatch) row.lastCatch = o.created_at;
-    }
-    if (isBillable(o) && inRange(new Date(o.completed_at as string).getTime(), range)) {
-      row.made += o.finished_price ?? 0;
-      row.pay += (o.finished_price ?? 0) * BILLING_FEE_RATE;
-      if (o.finished_currency) row.currency = o.finished_currency;
-    }
+    const row = (out[o.bot_id] ??= { made: 0, pay: 0, booked: 0, currency: fallback });
+    if (!o.created_at || !inRange(new Date(o.created_at).getTime(), range)) continue;
+    row.booked += 1;
+    if (!row.lastCatch || o.created_at > row.lastCatch) row.lastCatch = o.created_at;
+    const price = bookedAmount(o);
+    row.made += price;
+    row.pay += price * BILLING_FEE_RATE;
+    if (o.finished_currency) row.currency = o.finished_currency;
   }
   return out;
 }

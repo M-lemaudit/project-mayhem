@@ -4,7 +4,6 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -38,7 +37,6 @@ function ChartTooltip({ active, payload, currency }: TooltipPayload) {
     <div className="rounded-lg border border-hairline bg-surface px-3 py-2 shadow-[0_12px_30px_-12px_rgba(22,20,15,0.25)]">
       <p className="mb-1 text-xs font-medium text-ink">{p.label}</p>
       <p className="font-mono text-xs text-accent">Made {money(p.made, currency)}</p>
-      <p className="font-mono text-xs text-muted">Pay {money(p.pay, currency)}</p>
       <p className="font-mono text-[11px] text-muted/80">
         {p.count} ride{p.count === 1 ? '' : 's'}
       </p>
@@ -92,14 +90,6 @@ export function EarningsChart({ points, currency }: { points: SeriesPoint[]; cur
             fill="url(#madeFill)"
             dot={false}
             activeDot={{ r: 3, fill: 'var(--accent)' }}
-          />
-          <Line
-            type="monotone"
-            dataKey="pay"
-            stroke="var(--muted)"
-            strokeWidth={1}
-            strokeDasharray="3 3"
-            dot={false}
           />
         </AreaChart>
       </ResponsiveContainer>

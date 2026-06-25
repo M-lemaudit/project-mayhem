@@ -124,9 +124,7 @@ export default function DashboardPage() {
   const cur = primaryCurrency(metrics.byCurrency);
   const main = metrics.byCurrency.find((c) => c.currency === cur);
   const made = main?.made ?? 0;
-  const pay = main?.pay ?? 0;
   const completed = main?.completed ?? 0;
-  const net = made - pay;
   const avg = completed > 0 ? made / completed : 0;
   const extraCurrencies = metrics.byCurrency.filter((c) => c.currency !== cur);
   const activeBots = bots.filter((b) => b.status === 'RUNNING').length;
@@ -189,12 +187,12 @@ export default function DashboardPage() {
       </div>
 
       {/* Hero stats */}
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-hairline bg-hairline lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-hairline bg-hairline">
         <div className="bg-surface p-5 md:p-6">
           <Stat
             label="You made"
             value={money(made, cur)}
-            sub={`${completed} completed ride${completed === 1 ? '' : 's'}`}
+            sub={avg > 0 ? `${money(avg, cur)} avg / ride` : `${completed} booked ride${completed === 1 ? '' : 's'}`}
           />
           {extraCurrencies.length > 0 && (
             <p className="mt-1 text-xs text-muted">
@@ -203,21 +201,11 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="bg-surface p-5 md:p-6">
-          <Stat label="You pay (3%)" value={money(pay, cur)} sub="Service fee" accent />
-        </div>
-        <div className="bg-surface p-5 md:p-6">
           <Stat label="Rides booked" value={String(metrics.booked)} sub="Caught this period">
             <div className="mt-2">
               <Sparkline values={bookedBars} variant="bars" width={120} height={24} />
             </div>
           </Stat>
-        </div>
-        <div className="bg-surface p-5 md:p-6">
-          <Stat
-            label="Net earnings"
-            value={money(net, cur)}
-            sub={avg > 0 ? `${money(avg, cur)} avg / ride` : 'After 3% fee'}
-          />
         </div>
       </div>
 
@@ -228,9 +216,6 @@ export default function DashboardPage() {
           <div className="flex items-center gap-4 text-[11px] text-muted">
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-accent" /> Made
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-0 w-3 border-t border-dashed border-muted" /> Pay
             </span>
           </div>
         </div>
@@ -293,10 +278,6 @@ export default function DashboardPage() {
                   <div className="w-28 text-right">
                     <p className="eyebrow text-[10px]">Made</p>
                     <p className="font-display tabular text-sm text-ink">{money(agg.made, agg.currency)}</p>
-                  </div>
-                  <div className="hidden w-24 text-right sm:block">
-                    <p className="eyebrow text-[10px]">Pay</p>
-                    <p className="font-display tabular text-sm text-accent">{money(agg.pay, agg.currency)}</p>
                   </div>
 
                   <div className="flex items-center gap-2">

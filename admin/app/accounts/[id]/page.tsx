@@ -299,8 +299,6 @@ export default function AccountPage({ params }: AccountPageProps) {
   const cur = primaryCurrency(metrics.byCurrency);
   const m = metrics.byCurrency.find((c) => c.currency === cur);
   const made = m?.made ?? 0;
-  const pay = m?.pay ?? 0;
-  const net = made - pay;
 
   if (loading) return <FullPageLoader message="Loading bot…" />;
 
@@ -366,11 +364,9 @@ export default function AccountPage({ params }: AccountPageProps) {
             onCustomEnd={setCustomEnd}
           />
         </div>
-        <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-6">
           <QuickStat label="Booked" value={String(metrics.booked)} />
           <QuickStat label="Made" value={money(made, cur)} />
-          <QuickStat label="Pay (3%)" value={money(pay, cur)} accent />
-          <QuickStat label="Net" value={money(net, cur)} />
         </div>
         {series.points.length > 0 && (
           <div className="mt-5 border-t border-hairline pt-4">
