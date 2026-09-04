@@ -24,6 +24,16 @@ export interface BotRow {
   last_match?: LastMatch | null;
   /** Blacklane internal user id used for authenticated API actions (e.g. accept offer). */
   blacklane_user_id?: string | null;
+  /**
+   * Pickup-hour window the runtime actually enforces. Takes precedence over
+   * `filters.workingHoursStart/End`, so the UI must read *and* write it.
+   */
+  working_hours?: { start?: number | null; end?: number | null } | null;
+  /**
+   * Minimum minutes between two rides, as enforced by the runtime. Takes
+   * precedence over `filters.minGapMinutes`.
+   */
+  min_gap_minutes?: number | null;
   /** IANA timezone for stealth (e.g. America/New_York) */
   timezone?: string | null;
   /** Locale for stealth (e.g. en-US) */

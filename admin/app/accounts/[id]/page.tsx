@@ -41,6 +41,26 @@ const VEHICLES = [
   { id: 'first', label: 'First' },
 ];
 
+/** Slider ceiling for distance; the engine reads this value as "no upper limit". */
+const DISTANCE_MAX_KM = 5000;
+
+const toNumber = (v: unknown): number => {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v.trim()) return Number(v);
+  return NaN;
+};
+
+/** A pickup-window boundary: whole hour, 0..24 (24 and 0 both mean midnight). */
+const asHour = (v: unknown): number | null => {
+  const n = toNumber(v);
+  return Number.isInteger(n) && n >= 0 && n <= 24 ? n : null;
+};
+
+const asNonNegative = (v: unknown): number | null => {
+  const n = toNumber(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
 interface AccountPageProps {
   params: { id: string };
 }
@@ -79,6 +99,7 @@ export default function AccountPage({ params }: AccountPageProps) {
   const [allowedEndDate, setAllowedEndDate] = useState('');
   const [minGapMinutes, setMinGapMinutes] = useState(0);
   const [minLeadHours, setMinLeadHours] = useState(0);
+  const [maxLeadHours, setMaxLeadHours] = useState(0);
   const [workingHoursStart, setWorkingHoursStart] = useState(6);
   const [workingHoursEnd, setWorkingHoursEnd] = useState(22);
   const [rideType, setRideType] = useState('Both');
@@ -142,10 +163,24 @@ export default function AccountPage({ params }: AccountPageProps) {
       );
       setAllowedStartDate(String((typeof f.allowedStartDate === 'string' && f.allowedStartDate) || ''));
       setAllowedEndDate(String((typeof f.allowedEndDate === 'string' && f.allowedEndDate) || ''));
-      setMinGapMinutes(Number(f.minGapMinutes || f.min_gap_minutes || 0));
-      setMinLeadHours(Number(f.minLeadHours || f.min_lead_hours || 0));
-      setWorkingHoursStart(Number(f.workingHoursStart ?? f.working_hours_start ?? 6));
-      setWorkingHoursEnd(Number(f.workingHoursEnd ?? f.working_hours_end ?? 22));
+      // The runtime reads the `working_hours` / `min_gap_minutes` columns in
+      // preference to the filters JSON, so the screen has to do the same —
+      // otherwise it shows values the fleet is not actually using.
+      const wh = botData.working_hours;
+      setMinGapMinutes(
+        asNonNegative(botData.min_gap_minutes) ??
+          asNonNegative(f.minGapMinutes) ??
+          asNonNegative(f.min_gap_minutes) ??
+          0
+      );
+      setMinLeadHours(asNonNegative(f.minLeadHours) ?? asNonNegative(f.min_lead_hours) ?? 0);
+      setMaxLeadHours(asNonNegative(f.maxLeadHours) ?? asNonNegative(f.max_lead_hours) ?? 0);
+      setWorkingHoursStart(
+        asHour(wh?.start) ?? asHour(f.workingHoursStart) ?? asHour(f.working_hours_start) ?? 6
+      );
+      setWorkingHoursEnd(
+        asHour(wh?.end) ?? asHour(f.workingHoursEnd) ?? asHour(f.working_hours_end) ?? 22
+      );
       const storedRideType = String(f.rideType || f.ride_type || 'Both').toLowerCase();
       setRideType(storedRideType === 'transfer' ? 'Transfer' : storedRideType === 'hourly' ? 'Hourly' : 'Both');
       setVehicleClasses((Array.isArray(f.allowedVehicleTypes) ? f.allowedVehicleTypes : []) as string[]);
@@ -210,6 +245,7 @@ export default function AccountPage({ params }: AccountPageProps) {
       allowedEndDate,
       minGapMinutes,
       minLeadHours,
+      maxLeadHours,
       workingHoursStart,
       workingHoursEnd,
       rideType: rideType.trim().toLowerCase(),
@@ -230,7 +266,14 @@ export default function AccountPage({ params }: AccountPageProps) {
     }
     const { error } = await supabase
       .from('bots')
-      .update({ filters: updatedFilters, timezone })
+      .update({
+        filters: updatedFilters,
+        timezone,
+        // Columns are the runtime's source of truth; write both representations
+        // so the JSON and the columns can never drift apart again.
+        working_hours: { start: workingHoursStart, end: workingHoursEnd },
+        min_gap_minutes: minGapMinutes,
+      })
       .eq('id', id)
       .eq('user_id', user.id);
 
@@ -390,22 +433,35 @@ export default function AccountPage({ params }: AccountPageProps) {
             <Slider label="Price" valueLabel={`€${minPrice} – €${maxPrice}`}>
               <DualRange bound={[40, 5000]} value={[minPrice, maxPrice]} onChange={([a, b]) => dirty(() => { setMinPrice(a); setMaxPrice(b); })} />
             </Slider>
-            <Slider label="Distance" valueLabel={`${minDistance} – ${maxDistance} km`}>
-              <DualRange bound={[0, 5000]} value={[minDistance, maxDistance]} onChange={([a, b]) => dirty(() => { setMinDistance(a); setMaxDistance(b); })} />
+            <Slider
+              label="Distance"
+              valueLabel={maxDistance >= DISTANCE_MAX_KM ? `${minDistance} km – no limit` : `${minDistance} – ${maxDistance} km`}
+            >
+              <DualRange bound={[0, DISTANCE_MAX_KM]} value={[minDistance, maxDistance]} onChange={([a, b]) => dirty(() => { setMinDistance(a); setMaxDistance(b); })} />
             </Slider>
+            <p className="-mt-1 text-xs text-muted">
+              Ride distance in km. Sliding the upper handle to the far right ({DISTANCE_MAX_KM} km) removes the cap entirely.
+            </p>
           </Section>
 
           {/* Schedule */}
-          <Section icon={<Clock className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="Schedule" desc="Spacing, lead time and active hours.">
+          <Section icon={<Clock className="h-5 w-5 text-accent" strokeWidth={1.75} />} title="Schedule" desc="Spacing, lead time and the pickup hours to accept.">
             <SingleSlider label="Min gap between rides" value={minGapMinutes} unit="min" min={0} max={240} onChange={(v) => dirty(() => setMinGapMinutes(v))} />
             <SingleSlider label="Min lead time" value={minLeadHours} unit="h" min={0} max={72} onChange={(v) => dirty(() => setMinLeadHours(v))} />
             <p className="-mt-1 text-xs text-muted">
               Blacklane allows free cancellation when a ride is &gt;24h away — keep lead time inside that window for safety.
             </p>
+            <SingleSlider label="Max lead time" value={maxLeadHours} unit="h" min={0} max={72} zeroLabel="No limit" onChange={(v) => dirty(() => setMaxLeadHours(v))} />
+            <p className="-mt-1 text-xs text-muted">
+              Rejects offers starting further ahead than this. 0 = no limit; 24 keeps the bot on same-day jobs only.
+            </p>
             <div className="grid grid-cols-2 gap-3">
-              <NumberField label="Active from (h)" value={workingHoursStart} min={0} max={23} onChange={(v) => dirty(() => setWorkingHoursStart(v))} />
-              <NumberField label="Active until (h)" value={workingHoursEnd} min={1} max={24} onChange={(v) => dirty(() => setWorkingHoursEnd(v))} />
+              <NumberField label="Pickup from (h)" value={workingHoursStart} min={0} max={24} onChange={(v) => dirty(() => setWorkingHoursStart(v))} />
+              <NumberField label="Pickup until (h)" value={workingHoursEnd} min={0} max={24} onChange={(v) => dirty(() => setWorkingHoursEnd(v))} />
             </div>
+            <p className="-mt-1 text-xs text-muted">
+              These bound the <span className="text-ink">ride&apos;s pickup hour</span> in the base timezone — not the hours the bot hunts, which is always around the clock. A start later than the end wraps overnight (22 → 6 = nights only).
+            </p>
           </Section>
         </div>
 
@@ -639,12 +695,12 @@ function Slider({ label, valueLabel, children }: { label: string; valueLabel: st
   );
 }
 
-function SingleSlider({ label, value, unit, min, max, onChange }: { label: string; value: number; unit: string; min: number; max: number; onChange: (v: number) => void }) {
+function SingleSlider({ label, value, unit, min, max, zeroLabel, onChange }: { label: string; value: number; unit: string; min: number; max: number; zeroLabel?: string; onChange: (v: number) => void }) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm text-ink">{label}</span>
-        <span className="font-mono text-xs text-muted">{value} {unit}</span>
+        <span className="font-mono text-xs text-muted">{zeroLabel && value === 0 ? zeroLabel : `${value} ${unit}`}</span>
       </div>
       <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} className="h-1 w-full cursor-pointer appearance-none rounded-full bg-paper accent-accent" />
     </div>

@@ -214,25 +214,45 @@ export class BotStateService {
     };
   }
 
-  /** Fetches the latest filters from the database (queries Supabase each call). */
+  /**
+   * Fetches the latest filters from the database (queries Supabase each call).
+   *
+   * `working_hours` and `min_gap_minutes` are dedicated columns, not part of the
+   * `filters` JSON. They are merged into the returned object under their column
+   * names (not their camelCase filter names) so that `toBotFilters` can tell a
+   * column value apart from its JSON equivalent and apply the documented
+   * column-wins precedence. See the precedence comment on `toBotFilters`.
+   */
   async getFilters(): Promise<Record<string, unknown>> {
     const supabase = getSupabase();
 
     const { data, error } = await supabase
       .from('bots')
-      .select('filters, working_hours')
+      .select('filters, working_hours, min_gap_minutes')
       .eq('email', this.email)
       .single();
 
     if (error) {
       throw new Error(`BotStateService.getFilters: ${error.message}`);
     }
-    const filters = (data?.filters as Record<string, unknown>) ?? {};
-    const workingHours = (data as Record<string, unknown>)?.working_hours;
+    const row = (data ?? {}) as Record<string, unknown>;
+    const merged: Record<string, unknown> = {
+      ...((row.filters as Record<string, unknown>) ?? {}),
+    };
+
+    const workingHours = row.working_hours;
     if (workingHours && typeof workingHours === 'object') {
-      return { ...filters, working_hours: workingHours };
+      merged.working_hours = workingHours;
     }
-    return filters;
+
+    // Only forward a usable column value; a NULL/garbage column must fall through
+    // to the filters JSON rather than silently disabling the gap filter.
+    const minGapMinutes = row.min_gap_minutes;
+    if (typeof minGapMinutes === 'number' && Number.isFinite(minGapMinutes) && minGapMinutes >= 0) {
+      merged.min_gap_minutes = minGapMinutes;
+    }
+
+    return merged;
   }
 
   /** Fetches the current status from the database (for daemon: poll until RUNNING). */

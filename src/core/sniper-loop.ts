@@ -50,21 +50,78 @@ function getTodayIsoDateInTimezone(timezoneId?: string): string {
   }
 }
 
-/** Normalize raw filters from DB to BotFilters shape. */
+/** Narrow an unknown DB value to a usable number. */
+function toFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Narrow an unknown DB value to a usable non-negative number. */
+function toNonNegativeNumber(value: unknown): number | undefined {
+  const n = toFiniteNumber(value);
+  return n !== undefined && n >= 0 ? n : undefined;
+}
+
+/**
+ * Narrow an unknown DB value to a working-hour boundary.
+ * 24 is accepted so that `start: 0, end: 24` can express "no restriction".
+ */
+function toWorkingHour(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 24
+    ? value
+    : undefined;
+}
+
+/** Read a nested object out of the raw row without widening to `any`. */
+function toPlainObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * Normalize raw filters from DB to BotFilters shape.
+ *
+ * ── PRECEDENCE: dedicated column → `filters` JSON → hardcoded default ─────────
+ *
+ * Two settings live in BOTH the `bots.filters` JSON blob and their own column on
+ * `bots`: working hours (`bots.working_hours`) and the minimum gap between rides
+ * (`bots.min_gap_minutes`). `BotStateService.getFilters` merges those columns into
+ * the raw object under their snake_case column names, and this function resolves:
+ *
+ *   1. the column value, when present AND valid (see the narrowing helpers above);
+ *   2. otherwise the `filters` JSON equivalent (`workingHoursStart/End`, `minGapMinutes`);
+ *   3. otherwise DEFAULT_WORKING_HOURS_START/END, or "unset" for the gap.
+ *
+ * WHY the column wins and not the JSON: the columns are the legacy source of truth
+ * that the running fleet has been obeying in production, so flipping the order would
+ * instantly change live acceptance behaviour on bots whose two values disagree. The
+ * admin UI historically wrote only the JSON, which is how the two drifted apart; it
+ * now reads the columns and writes BOTH on save, so new edits keep them in sync and
+ * the precedence becomes invisible for any bot saved through the UI.
+ */
 function toBotFilters(raw: Record<string, unknown>): BotFilters {
-  const workingHours = raw.working_hours as { start?: number; end?: number } | undefined;
+  const workingHours = toPlainObject(raw.working_hours);
   const start =
-    typeof workingHours?.start === 'number'
-      ? workingHours.start
-      : typeof raw.workingHoursStart === 'number'
-        ? raw.workingHoursStart
-        : DEFAULT_WORKING_HOURS_START;
+    toWorkingHour(workingHours?.start) ??
+    toWorkingHour(raw.workingHoursStart) ??
+    DEFAULT_WORKING_HOURS_START;
   const end =
-    typeof workingHours?.end === 'number'
-      ? workingHours.end
-      : typeof raw.workingHoursEnd === 'number'
-        ? raw.workingHoursEnd
-        : DEFAULT_WORKING_HOURS_END;
+    toWorkingHour(workingHours?.end) ??
+    toWorkingHour(raw.workingHoursEnd) ??
+    DEFAULT_WORKING_HOURS_END;
+
+  // Column wins over JSON; an absent/invalid value on both sides stays unset so the
+  // gap filter is skipped entirely rather than being pinned to 0.
+  const minGapMinutes =
+    toNonNegativeNumber(raw.min_gap_minutes) ?? toNonNegativeNumber(raw.minGapMinutes);
+
+  // Mirrors of maxDistance / minHoursFromNow. The admin UI writes camelCase
+  // (`maxLeadHours` for the lead-time cap); older rows carry the snake_case variants.
+  const minDistance = toFiniteNumber(raw.minDistance) ?? toFiniteNumber(raw.min_distance);
+  const maxHoursFromNow =
+    toFiniteNumber(raw.maxLeadHours) ??
+    toFiniteNumber(raw.maxHoursFromNow) ??
+    toFiniteNumber(raw.max_lead_hours);
 
   // Normalize rideType from Supabase (supports both rideType and ride_type).
   let normalizedRideType: string | undefined;
@@ -88,9 +145,11 @@ function toBotFilters(raw: Record<string, unknown>): BotFilters {
       : [],
     ...(typeof raw.maxPrice === 'number' && { maxPrice: raw.maxPrice }),
     ...(typeof raw.maxDistance === 'number' && { maxDistance: raw.maxDistance }),
+    ...(minDistance !== undefined && { minDistance }),
     ...(typeof raw.minHoursFromNow === 'number' && { minHoursFromNow: raw.minHoursFromNow }),
     ...(typeof raw.minLeadHours === 'number' && { minHoursFromNow: raw.minLeadHours }),
-    ...(typeof raw.minGapMinutes === 'number' && raw.minGapMinutes >= 0 && { minGapMinutes: raw.minGapMinutes }),
+    ...(maxHoursFromNow !== undefined && { maxHoursFromNow }),
+    ...(minGapMinutes !== undefined && { minGapMinutes }),
     workingHoursStart: start,
     workingHoursEnd: end,
     // New Supabase-driven filters
@@ -435,8 +494,11 @@ export class SniperLoop {
               if (this.lastBlackoutPruneIsoDate !== todayIso) {
                 this.lastBlackoutPruneIsoDate = todayIso;
                 try {
+                  // getFilters() merges the dedicated columns into `raw`; strip them back
+                  // out so this write-back cannot copy a column into the filters JSON.
                   const rawFiltersOnly: Record<string, unknown> = { ...(raw ?? {}) };
-                  delete (rawFiltersOnly as any).working_hours;
+                  delete rawFiltersOnly.working_hours;
+                  delete rawFiltersOnly.min_gap_minutes;
 
                   const bo = (rawFiltersOnly as any).blackoutDates;
                   if (Array.isArray(bo) && bo.length > 0) {

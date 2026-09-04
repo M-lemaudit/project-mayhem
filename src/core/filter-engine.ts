@@ -9,14 +9,27 @@ const FILTER_TRACE_ENABLED = isEnvFlagEnabled(process.env.FILTER_TRACE);
 const FILTER_TRACE_FULL_EVAL =
   FILTER_TRACE_ENABLED && isEnvFlagEnabled(process.env.FILTER_TRACE_FULL_EVAL);
 
+/**
+ * Mirrors the max position of the admin UI's distance slider. The UI treats that position as
+ * "no limit" rather than a literal 5000 km cap, and every live bot stores exactly this value,
+ * so anything at or above it must be read as "unbounded" — otherwise enabling the filter would
+ * start rejecting the (hypothetical) 5000+ km offers nobody asked to exclude.
+ */
+const DISTANCE_UNBOUNDED_KM = 5000;
+
 export interface BotFilters {
   minPrice: number;
   /** Optional max price (offers above this are skipped). */
   maxPrice?: number;
   allowedVehicleTypes: string[];
+  /** Minimum ride distance in km. 0/undefined = no lower bound. */
+  minDistance?: number;
+  /** Maximum ride distance in km. >= DISTANCE_UNBOUNDED_KM (admin slider max) = no upper bound. */
   maxDistance?: number;
   /** Only match offers whose pickup/start (starts_at) is at least this many hours from now. */
   minHoursFromNow?: number;
+  /** Only match offers whose pickup/start (starts_at) is at most this many hours from now. */
+  maxHoursFromNow?: number;
   /** Working hours (machine local): start hour (0-23), default 6. */
   workingHoursStart?: number;
   /** Working hours (machine local): end hour (0-23), default 22. Inside = hour >= start && hour < end. */
@@ -226,6 +239,144 @@ export function getOfferPrice(offer: OfferShape): number | null {
     return null;
   }
   return null;
+}
+
+/**
+ * Read the great-circle ride distance (km) the offer normalizer puts in `attributes.distance_km`.
+ * Returns null when the field is absent or unusable — callers must treat that as "unknown",
+ * not as "zero".
+ */
+export function getOfferDistanceKm(offer: OfferShape): number | null {
+  const raw = (offer?.attributes as Record<string, unknown> | undefined)?.distance_km;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null;
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const n = parseFloat(raw.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+// ── Timezone-aware date bound parsing ──────────────────────────────
+
+/** A bound string that already pins an instant (trailing `Z` or `±HH:mm`). */
+const EXPLICIT_ZONE_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const LOCAL_DATETIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?$/;
+
+/**
+ * UTC offset (ms) that `timeZone` is running at the given instant. Derived from formatted parts
+ * because the platform exposes no direct offset API; `formatToParts` is the only zone database
+ * access available without pulling in a dependency.
+ */
+function zoneOffsetMsAt(instantMs: number, timeZone: string): number {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(instantMs));
+  } catch {
+    // Unknown timezone id: signal "no offset available" so the caller can fall back.
+    return Number.NaN;
+  }
+
+  const num = (type: string): number => {
+    const found = parts.find((p) => p.type === type);
+    return found ? Number(found.value) : Number.NaN;
+  };
+
+  const year = num('year');
+  const month = num('month');
+  const day = num('day');
+  // Some ICU builds render midnight as hour 24 in hour12:false mode.
+  const hour = num('hour') === 24 ? 0 : num('hour');
+  const minute = num('minute');
+  const second = num('second');
+  if ([year, month, day, hour, minute, second].some((n) => Number.isNaN(n))) {
+    return Number.NaN;
+  }
+
+  const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  // Formatted parts are second-granular, so compare against the instant truncated to seconds.
+  return wallAsUtc - Math.floor(instantMs / 1000) * 1000;
+}
+
+/** Convert a wall-clock time in `timeZone` into the matching UTC instant (ms). */
+function wallTimeToUtcMs(
+  y: number,
+  mo: number,
+  d: number,
+  h: number,
+  mi: number,
+  s: number,
+  ms: number,
+  timeZone: string
+): number {
+  const naiveUtc = Date.UTC(y, mo - 1, d, h, mi, s, ms);
+  const firstOffset = zoneOffsetMsAt(naiveUtc, timeZone);
+  if (Number.isNaN(firstOffset)) return Number.NaN;
+  const firstGuess = naiveUtc - firstOffset;
+  // Second pass: across a DST transition the offset at the guessed instant differs from the one
+  // at the naive instant, so re-derive it from the corrected instant before committing.
+  const secondOffset = zoneOffsetMsAt(firstGuess, timeZone);
+  if (Number.isNaN(secondOffset)) return firstGuess;
+  return naiveUtc - secondOffset;
+}
+
+/**
+ * Turn a stored `allowedStartDate`/`allowedEndDate` into the UTC instant it denotes in the bot's
+ * timezone. Both bounds are documented as INCLUSIVE, so a date-only end bound covers the whole
+ * local day (…23:59:59.999) instead of collapsing to that day's midnight UTC — which used to
+ * reject essentially every ride on the last allowed day.
+ * Returns null when the string cannot be parsed at all.
+ */
+function parseFilterBound(raw: string, kind: 'start' | 'end', timezoneId?: string): Date | null {
+  const value = raw.trim();
+  if (!value) return null;
+
+  // An explicit zone means the author already pinned the instant: never re-interpret it.
+  if (EXPLICIT_ZONE_RE.test(value)) {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const dateOnly = DATE_ONLY_RE.exec(value);
+  const dateTime = dateOnly ? null : LOCAL_DATETIME_RE.exec(value);
+
+  const parsed = dateOnly ?? dateTime;
+  const tz = typeof timezoneId === 'string' ? timezoneId.trim() : '';
+  if (parsed && tz) {
+    const isDateOnly = dateOnly !== null;
+    const endOfDay = isDateOnly && kind === 'end';
+    const y = Number(parsed[1]);
+    const mo = Number(parsed[2]);
+    const d = Number(parsed[3]);
+    const h = isDateOnly ? (endOfDay ? 23 : 0) : Number(parsed[4]);
+    const mi = isDateOnly ? (endOfDay ? 59 : 0) : Number(parsed[5]);
+    const s = isDateOnly ? (endOfDay ? 59 : 0) : Number(parsed[6] ?? 0);
+    const ms = isDateOnly ? (endOfDay ? 999 : 0) : Number((parsed[7] ?? '0').padEnd(3, '0'));
+    const utcMs = wallTimeToUtcMs(y, mo, d, h, mi, s, ms, tz);
+    if (!Number.isNaN(utcMs)) return new Date(utcMs);
+    // Invalid/unknown timezone id: fall through to the naive parse below.
+  }
+
+  const naive = new Date(value);
+  if (Number.isNaN(naive.getTime())) return null;
+  // Without a usable timezone we keep the historic naive parse, but a date-only end bound still
+  // has to span its day or "inclusive" would remain a lie.
+  if (dateOnly && kind === 'end') {
+    return new Date(naive.getTime() + 24 * 3600 * 1000 - 1);
+  }
+  return naive;
 }
 
 /** Extract start date from offer (root or attributes.starts_at). Returns null if missing/invalid. */
@@ -456,6 +607,86 @@ export class FilterEngine {
       }
     }
 
+    // ── Distance (km) ─────────────────────────────────────────────
+    const minDistance = filters.minDistance;
+    const maxDistance = filters.maxDistance;
+    const hasMinDistance = typeof minDistance === 'number' && minDistance > 0;
+    // A max at (or above) the admin slider's top position means "no limit", not a 5000 km cap.
+    const hasMaxDistance = typeof maxDistance === 'number' && maxDistance < DISTANCE_UNBOUNDED_KM;
+    if (hasMinDistance || hasMaxDistance) {
+      const distanceKm = getOfferDistanceKm(offer);
+      if (distanceKm == null) {
+        // Deliberately PERMISSIVE where rideType is strict: distance_km only exists when the
+        // offer carries both sets of coordinates, which most offers do not. Rejecting on a
+        // missing field here would silently stop the bot from accepting anything.
+        traceCompare({
+          offerId,
+          filterName: 'distance_present',
+          op: 'skip-when-unknown',
+          leftLabel: 'distance_km',
+          leftValue: distanceKm,
+          rightLabel: 'action',
+          rightValue: 'accept (unknown distance is not a rejection)',
+          passed: true,
+        });
+      } else {
+        if (hasMinDistance) {
+          const passedMinDistance = distanceKm >= minDistance;
+          traceCompare({
+            offerId,
+            filterName: 'minDistance',
+            op: '>=',
+            leftLabel: 'distanceKm',
+            leftValue: distanceKm,
+            rightLabel: 'minDistance',
+            rightValue: minDistance,
+            passed: passedMinDistance,
+          });
+          if (!passedMinDistance) {
+            const res = fail(
+              'minDistance',
+              `Distance too short (${distanceKm}km < min ${minDistance}km)`,
+              {
+                op: '>=',
+                leftLabel: 'distanceKm',
+                leftValue: distanceKm,
+                rightLabel: 'minDistance',
+                rightValue: minDistance,
+              }
+            );
+            if (res) return res;
+          }
+        }
+        if (hasMaxDistance) {
+          const passedMaxDistance = distanceKm <= maxDistance;
+          traceCompare({
+            offerId,
+            filterName: 'maxDistance',
+            op: '<=',
+            leftLabel: 'distanceKm',
+            leftValue: distanceKm,
+            rightLabel: 'maxDistance',
+            rightValue: maxDistance,
+            passed: passedMaxDistance,
+          });
+          if (!passedMaxDistance) {
+            const res = fail(
+              'maxDistance',
+              `Distance too long (${distanceKm}km > max ${maxDistance}km)`,
+              {
+                op: '<=',
+                leftLabel: 'distanceKm',
+                leftValue: distanceKm,
+                rightLabel: 'maxDistance',
+                rightValue: maxDistance,
+              }
+            );
+            if (res) return res;
+          }
+        }
+      }
+    }
+
     // ── Ride type (transfer / hourly / both) ─────────────────────
     const rideTypeRaw = filters.rideType;
     const rideType =
@@ -564,6 +795,62 @@ export class FilterEngine {
               leftValue: hoursFromNow,
               rightLabel: 'minHoursFromNow',
               rightValue: minHours,
+            }
+          );
+          if (res) return res;
+        }
+      }
+    }
+
+    // ── Max lead hours ────────────────────────────────────────────
+    // Mirror of minHoursFromNow, so a chauffeur can say "at night, same-day jobs only".
+    // A config where min > max can never match; that is the operator's choice, not an error,
+    // so both checks simply run and the offer is rejected by whichever fires first.
+    const maxHours = filters.maxHoursFromNow;
+    if (typeof maxHours === 'number' && maxHours > 0) {
+      const nowUtc = Date.now();
+      if (offerStart == null) {
+        const res = fail('maxHoursFromNow_start', 'Missing starts_at', {
+          op: '!= null',
+          leftLabel: 'offerStart',
+          leftValue: offerStart,
+          rightLabel: 'required',
+          rightValue: true,
+        });
+        if (res) return res;
+      } else {
+        traceCompare({
+          offerId,
+          filterName: 'maxHoursFromNow_start',
+          op: '!= null',
+          leftLabel: 'offerStart',
+          leftValue: offerStart,
+          rightLabel: 'required',
+          rightValue: true,
+          passed: true,
+        });
+        const hoursFromNow = (offerStart.getTime() - nowUtc) / (3600 * 1000);
+        const passedMaxLead = hoursFromNow <= maxHours;
+        traceCompare({
+          offerId,
+          filterName: 'maxHoursFromNow',
+          op: '<=',
+          leftLabel: 'hoursFromNow',
+          leftValue: hoursFromNow,
+          rightLabel: 'maxHoursFromNow',
+          rightValue: maxHours,
+          passed: passedMaxLead,
+        });
+        if (!passedMaxLead) {
+          const res = fail(
+            'maxHoursFromNow',
+            `Too far out (starts in ${hoursFromNow.toFixed(1)}h, max ${maxHours}h)`,
+            {
+              op: '<=',
+              leftLabel: 'hoursFromNow',
+              leftValue: hoursFromNow,
+              rightLabel: 'maxHoursFromNow',
+              rightValue: maxHours,
             }
           );
           if (res) return res;
@@ -681,8 +968,12 @@ export class FilterEngine {
         if (res) return res;
       } else {
         if (hasStartBound) {
-          const startBoundary = new Date(filters.allowedStartDate as string);
-          if (Number.isNaN(startBoundary.getTime())) {
+          const startBoundary = parseFilterBound(
+            filters.allowedStartDate as string,
+            'start',
+            timezoneId
+          );
+          if (!startBoundary || Number.isNaN(startBoundary.getTime())) {
             const res = fail(
               'staticTimeRange',
               'Invalid allowedStartDate',
@@ -725,8 +1016,8 @@ export class FilterEngine {
         }
 
         if (hasEndBound) {
-          const endBoundary = new Date(filters.allowedEndDate as string);
-          if (Number.isNaN(endBoundary.getTime())) {
+          const endBoundary = parseFilterBound(filters.allowedEndDate as string, 'end', timezoneId);
+          if (!endBoundary || Number.isNaN(endBoundary.getTime())) {
             const res = fail(
               'staticTimeRange',
               'Invalid allowedEndDate',

@@ -19,6 +19,7 @@
     "test:finished-rides": "npm run build && node dist/scripts/test-fetch-finished-rides.js",
     "test:integration-rides": "npm run build && node dist/scripts/test-integration-rides.js",
     "test:gap": "npm run build && node dist/scripts/test-gap.js",
+    "test:filters": "npm run build && node dist/scripts/test-filters.js",
     "reconcile": "npm run build && node dist/jobs/reconcile-billing.js",
     "start": "node dist/index.js",
     "admin:dev": "cd admin && npm run dev"

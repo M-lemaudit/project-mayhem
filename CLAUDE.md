@@ -18,7 +18,7 @@ Blacklane Sniper V2 — a fleet manager that runs multiple bot instances to auto
   - `npm run test:auth` — manual auth test
   - `npm run test:offers` — fetch offers
   - `npm run test:sniper` — sniper loop
-  - `npm run test:bookings` / `test:planned-rides` / `test:integration-rides` / `test:gap`
+  - `npm run test:bookings` / `test:planned-rides` / `test:integration-rides` / `test:gap` / `test:filters`
 - **Docker:** `docker-compose up` (builds from Dockerfile, uses `.env`)
 
 ## Architecture
@@ -53,4 +53,5 @@ See `.env.example`. Required: `SUPABASE_URL`, `SUPABASE_KEY`, `BLACKLANE_API_URL
 - HTTP calls use `keepAlive` agents for latency reduction.
 - Minimal logging in the hot loop; structured JSON logs (winston) for lifecycle events.
 - Comments explain WHY, not WHAT. Prefer functional patterns.
-- `allowedAirlines`, `allowedPickupCities`, `allowedDropoffCities` are actually **blocklists** despite their names (historical naming).
+- `allowedAirlines` is actually a **blocklist** despite its name (historical naming): a non-empty list blocks offers whose `flight_number` matches one of the codes; empty = block nothing.
+- `allowedPickupCities` / `allowedDropoffCities` are genuine **allowlists**, matching their names and the admin UI labels: a non-empty list rejects any offer whose resolved city is not in it; empty = accept every city.

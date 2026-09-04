@@ -162,10 +162,15 @@ export async function updateClient(
       }
     }
     if (input.minGapMinutes !== undefined) {
+      // The runtime reads the `min_gap_minutes` COLUMN in preference to this JSON key, so writing
+      // only the JSON here would leave the edit invisible to the fleet (or silently overridden by
+      // a stale column). Write both, exactly like the account settings page does.
       if (typeof input.minGapMinutes === 'number' && input.minGapMinutes >= 0) {
         filters.minGapMinutes = input.minGapMinutes;
+        updates.min_gap_minutes = input.minGapMinutes;
       } else {
         delete filters.minGapMinutes;
+        updates.min_gap_minutes = null;
       }
     }
     if (input.vehicleTypes !== undefined) {

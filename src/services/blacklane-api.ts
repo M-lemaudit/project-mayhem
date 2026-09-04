@@ -123,11 +123,62 @@ function buildDefaultHeaders(): Record<string, string> {
 
 const OFFERS_URL = 'https://partner-portal-api.blacklane.com/api/v1/chauffeur/offers';
 
-/** Query params for GET /api/v1/chauffeur/offers */
-const OFFERS_PARAMS = {
-  sort_by: 'start_time',
-  order_by: 'asc',
-};
+/** Sort key for GET /api/v1/chauffeur/offers (order is chosen per call, see below). */
+const OFFERS_SORT_BY = 'start_time';
+
+type OffersOrder = 'asc' | 'desc';
+type OffersSortStrategy = 'alternate' | OffersOrder;
+
+/**
+ * The offers endpoint truncates its response to one page and never documented its page params.
+ * Sorted `asc` only, we permanently see the soonest offers, so far-future ones (next month)
+ * fall off the end of page 1 and are never even evaluated by the filter engine. Alternating the
+ * order exposes the far end of the list on every other poll at zero extra request cost — the hot
+ * loop polls continuously, so a far-future offer becomes visible within one extra cycle.
+ */
+function parseOffersSortStrategy(raw: string | undefined): OffersSortStrategy {
+  const normalized = raw?.trim().replace(/^['"]+|['"]+$/g, '').toLowerCase() ?? '';
+  if (normalized === 'asc' || normalized === 'desc' || normalized === 'alternate') return normalized;
+  return 'alternate';
+}
+
+function parsePositiveInt(raw: string | undefined): number | null {
+  const parsed = Number(raw?.trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+const OFFERS_SORT_STRATEGY = parseOffersSortStrategy(process.env.OFFERS_SORT_STRATEGY);
+/** Unset → no page-size param is sent at all (identical to previous behaviour). */
+const OFFERS_PAGE_SIZE = parsePositiveInt(process.env.OFFERS_PAGE_SIZE);
+/** Unset or 1 → exactly one request per getOffers() call, to keep hot-loop latency unchanged. */
+const OFFERS_MAX_PAGES = parsePositiveInt(process.env.OFFERS_MAX_PAGES) ?? 1;
+const OFFERS_TRACE_ENABLED = isEnvFlagEnabled(process.env.OFFERS_TRACE);
+
+type OffersQueryParams = Record<string, string | number>;
+
+/**
+ * We cannot probe the live API for its real pagination param names, so every common spelling is
+ * sent at once: unknown query params are ignored by virtually every API, and this costs nothing.
+ */
+function buildOffersParams(orderBy: OffersOrder, pageNumber?: number): OffersQueryParams {
+  const params: OffersQueryParams = { sort_by: OFFERS_SORT_BY, order_by: orderBy };
+
+  if (OFFERS_PAGE_SIZE != null) {
+    params.per_page = OFFERS_PAGE_SIZE;
+    params['page[size]'] = OFFERS_PAGE_SIZE;
+    params.limit = OFFERS_PAGE_SIZE;
+    params.page_size = OFFERS_PAGE_SIZE;
+  }
+
+  // Deliberately no bare `page=N`: Rack/Rails reject a request that mixes a scalar `page` with
+  // `page[number]` on the same key (ParameterTypeError → 400), which would break the whole poll.
+  if (pageNumber != null && pageNumber > 1) {
+    params['page[number]'] = pageNumber;
+    params.page_number = pageNumber;
+  }
+
+  return params;
+}
 
 // ── New API response normalization ────────────────────────────────────────────
 
@@ -162,6 +213,86 @@ interface NewApiResponse {
   items?: NewApiOffer[];
 }
 
+/** Location resource in the JSON:API-compatible shape FilterEngine consumes. */
+interface NormalizedLocationResource {
+  id: string;
+  type: 'location';
+  attributes: {
+    airport_iata: string | null;
+    formatted_address_en: string;
+    city: string;
+    /** FilterEngine.isAirportLocation() reads this; without it the airport-direction filter is dead. */
+    tags: string[];
+  };
+}
+
+/** Offer resource in the JSON:API-compatible shape FilterEngine consumes. */
+interface NormalizedOfferResource {
+  id: string;
+  type: string;
+  price?: number;
+  vehicle_type?: string;
+  attributes: {
+    price?: number;
+    currency?: string;
+    service_class?: string;
+    booking_type?: string;
+    pickup_at?: string;
+    starts_at?: string;
+    flight_number?: string;
+    duration?: number;
+    /** Straight-line (great-circle) distance, NOT road distance. Absent when coords are missing. */
+    distance_km?: number;
+  };
+  relationships: {
+    pickup_location: { data: { id: string } };
+    dropoff_location: { data: { id: string } };
+  };
+}
+
+interface NormalizedOffersResponse {
+  data: NormalizedOfferResource[];
+  included: NormalizedLocationResource[];
+}
+
+const EARTH_RADIUS_KM = 6371;
+
+function isValidLatitude(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= -90 && value <= 90;
+}
+
+function isValidLongitude(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= -180 && value <= 180;
+}
+
+/** Great-circle distance in km between two WGS84 points (straight line, not road distance). */
+export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+  // clamp guards against float drift pushing sqrt(a) marginally above 1 for antipodal points
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Straight-line pickup→dropoff distance, rounded to 0.1 km. Undefined unless both coords are usable. */
+function straightLineDistanceKm(
+  from: NewApiLocation | undefined,
+  to: NewApiLocation | undefined
+): number | undefined {
+  if (!from || !to) return undefined;
+  if (!isValidLatitude(from.latitude) || !isValidLongitude(from.longitude)) return undefined;
+  if (!isValidLatitude(to.latitude) || !isValidLongitude(to.longitude)) return undefined;
+  return Math.round(haversineKm(from.latitude, from.longitude, to.latitude, to.longitude) * 10) / 10;
+}
+
+/** An airportCode is the only airport signal the new API gives us. */
+function buildLocationTags(loc: NewApiLocation): string[] {
+  return typeof loc.airportCode === 'string' && loc.airportCode.trim() !== '' ? ['airport'] : [];
+}
+
 function extractCityFromAddress(loc: NewApiLocation): string {
   // Address format: "Hotel Name, Street 123, 33480 Palm Beach, Florida"
   // Try to capture the word(s) after the zip code
@@ -175,14 +306,14 @@ function extractCityFromAddress(loc: NewApiLocation): string {
  * Converts the new /api/v1/chauffeur/offers response into the JSON:API-compatible
  * shape that FilterEngine expects: { data: OfferShape[], included: LocationResource[] }.
  */
-function normalizeNewApiResponse(raw: unknown): { data: unknown[]; included: unknown[] } {
+function normalizeNewApiResponse(raw: unknown): NormalizedOffersResponse {
   const response = raw as NewApiResponse | null;
   if (!response?.items || !Array.isArray(response.items)) {
     return { data: [], included: [] };
   }
 
-  const data: unknown[] = [];
-  const included: unknown[] = [];
+  const data: NormalizedOfferResource[] = [];
+  const included: NormalizedLocationResource[] = [];
 
   for (const item of response.items) {
     if (!item?.id) continue;
@@ -199,6 +330,7 @@ function normalizeNewApiResponse(raw: unknown): { data: unknown[]; included: unk
           airport_iata: ride.pickUpLocation.airportCode ?? null,
           formatted_address_en: ride.pickUpLocation.address ?? ride.pickUpLocation.name ?? '',
           city: extractCityFromAddress(ride.pickUpLocation),
+          tags: buildLocationTags(ride.pickUpLocation),
         },
       });
     }
@@ -208,12 +340,16 @@ function normalizeNewApiResponse(raw: unknown): { data: unknown[]; included: unk
         id: dropoffId,
         type: 'location',
         attributes: {
-          airport_iata: (ride.dropOffLocation as NewApiLocation & { airportCode?: string }).airportCode ?? null,
+          airport_iata: ride.dropOffLocation.airportCode ?? null,
           formatted_address_en: ride.dropOffLocation.address ?? ride.dropOffLocation.name ?? '',
           city: extractCityFromAddress(ride.dropOffLocation),
+          tags: buildLocationTags(ride.dropOffLocation),
         },
       });
     }
+
+    // Straight-line distance, not road distance — only usable as a rough proximity signal.
+    const distanceKm = straightLineDistanceKm(ride?.pickUpLocation, ride?.dropOffLocation);
 
     data.push({
       id: item.id,
@@ -229,6 +365,7 @@ function normalizeNewApiResponse(raw: unknown): { data: unknown[]; included: unk
         starts_at: ride?.pickupTime,
         flight_number: ride?.flightNumber,
         duration: ride?.estimatedDurationMinutes,
+        ...(distanceKm != null ? { distance_km: distanceKm } : {}),
       },
       relationships: {
         pickup_location: { data: { id: pickupId } },
@@ -238,6 +375,34 @@ function normalizeNewApiResponse(raw: unknown): { data: unknown[]; included: unk
   }
 
   return { data, included };
+}
+
+/** Top-level envelope keys of the raw offers response — the only clue to its real pagination shape. */
+function extractEnvelopeKeys(raw: unknown): string[] {
+  if (typeof raw !== 'object' || raw == null || Array.isArray(raw)) return [];
+  return Object.keys(raw as Record<string, unknown>);
+}
+
+/** Earliest/furthest pickup instant in a normalized batch — the metric that proves the truncation. */
+function summarizePickupWindow(offers: NormalizedOfferResource[]): {
+  earliestPickupAt: string | null;
+  furthestPickupAt: string | null;
+} {
+  let earliest: number | null = null;
+  let furthest: number | null = null;
+
+  for (const offer of offers) {
+    const parsed = parseToDate(offer.attributes.pickup_at);
+    if (!parsed) continue;
+    const time = parsed.getTime();
+    if (earliest == null || time < earliest) earliest = time;
+    if (furthest == null || time > furthest) furthest = time;
+  }
+
+  return {
+    earliestPickupAt: earliest == null ? null : new Date(earliest).toISOString(),
+    furthestPickupAt: furthest == null ? null : new Date(furthest).toISOString(),
+  };
 }
 
 /** Query params for GET /hades/bookings (upcoming / My Rides). */
@@ -528,6 +693,10 @@ export class BlacklaneApi {
   private currentProxyUrl: string;
   private accessToken: string;
   private cookies: AuthCookie[];
+  /** Drives the asc/desc rotation when OFFERS_SORT_STRATEGY=alternate. */
+  private offersFetchCount = 0;
+  /** Warn once per instance: repeating a page means the API ignored our page-number params. */
+  private warnedOffersPaginationIgnored = false;
 
   constructor(
     label: string,
@@ -754,25 +923,27 @@ export class BlacklaneApi {
     return error instanceof Error ? error : new Error(String(error));
   }
 
-  /** GET /api/v1/chauffeur/offers — partner-portal-api endpoint. Returns the response data. */
-  async getOffers(): Promise<unknown> {
-    const headers: Record<string, string> = {
-      accept: '*/*',
-      'x-user-id': this.blacklaneUserId,
-      'x-user-roles': 'dispatcher,driver,on_demand,provider',
-    };
-    if (this.bdId) headers['x-user-bd-id'] = this.bdId;
-    if (this.lspId) headers['x-user-lsp-id'] = this.lspId;
+  /** Sort order for the next offers poll; alternates so both ends of the list stay visible. */
+  private nextOffersOrderBy(): OffersOrder {
+    if (OFFERS_SORT_STRATEGY !== 'alternate') return OFFERS_SORT_STRATEGY;
+    this.offersFetchCount += 1;
+    return this.offersFetchCount % 2 === 1 ? 'asc' : 'desc';
+  }
 
+  /** One offers request, with the existing transient proxy/network retry policy. Returns the raw body. */
+  private async fetchOffersPage(
+    headers: Record<string, string>,
+    params: OffersQueryParams
+  ): Promise<unknown> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= OFFERS_PROXY_RETRY_ATTEMPTS; attempt += 1) {
       try {
         const client = await this.getAbsoluteClient();
         const response = await client.get<unknown>(OFFERS_URL, {
-          searchParams: OFFERS_PARAMS,
+          searchParams: params,
           headers,
         });
-        return normalizeNewApiResponse(response.body);
+        return response.body;
       } catch (error) {
         const normalizedError = this.normalizeRequestError(error);
         lastError = normalizedError;
@@ -788,6 +959,88 @@ export class BlacklaneApi {
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  /**
+   * GET /api/v1/chauffeur/offers — partner-portal-api endpoint. Returns the response data.
+   * Issues exactly one request unless OFFERS_MAX_PAGES > 1 (hot-loop latency stays unchanged by default).
+   */
+  async getOffers(): Promise<unknown> {
+    const headers: Record<string, string> = {
+      accept: '*/*',
+      'x-user-id': this.blacklaneUserId,
+      'x-user-roles': 'dispatcher,driver,on_demand,provider',
+    };
+    if (this.bdId) headers['x-user-bd-id'] = this.bdId;
+    if (this.lspId) headers['x-user-lsp-id'] = this.lspId;
+
+    const orderBy = this.nextOffersOrderBy();
+    const firstBody = await this.fetchOffersPage(headers, buildOffersParams(orderBy));
+    const merged = normalizeNewApiResponse(firstBody);
+    const seenOfferIds = new Set<string>(merged.data.map((offer) => offer.id));
+    let pagesFetched = 1;
+
+    for (let pageNumber = 2; pageNumber <= OFFERS_MAX_PAGES; pageNumber += 1) {
+      const pageBody = await this.fetchOffersPage(headers, buildOffersParams(orderBy, pageNumber));
+      const page = normalizeNewApiResponse(pageBody);
+      pagesFetched += 1;
+      if (page.data.length === 0) break;
+
+      const freshOffers = page.data.filter((offer) => !seenOfferIds.has(offer.id));
+      if (freshOffers.length === 0) {
+        // Every id repeated → the API ignored our page-number params and re-served page 1.
+        if (!this.warnedOffersPaginationIgnored) {
+          this.warnedOffersPaginationIgnored = true;
+          logger.warn(
+            `[OFFERS] Page ${pageNumber} repeated page 1 for ${this.label}; the API ignores our page-number params. Falling back to a single page (set OFFERS_MAX_PAGES=1).`
+          );
+        }
+        break;
+      }
+
+      const freshLocationIds = new Set<string>();
+      for (const offer of freshOffers) {
+        seenOfferIds.add(offer.id);
+        freshLocationIds.add(offer.relationships.pickup_location.data.id);
+        freshLocationIds.add(offer.relationships.dropoff_location.data.id);
+      }
+      merged.data.push(...freshOffers);
+      merged.included.push(...page.included.filter((loc) => freshLocationIds.has(loc.id)));
+    }
+
+    this.logOffersBatch(merged, orderBy, firstBody, pagesFetched);
+    return merged;
+  }
+
+  /**
+   * Cheap visibility on the pagination theory: the batch size and how far into the future it reaches.
+   * OFFERS_TRACE additionally dumps the raw envelope keys, which are what reveal the real page shape.
+   */
+  private logOffersBatch(
+    batch: NormalizedOffersResponse,
+    orderBy: OffersOrder,
+    firstBody: unknown,
+    pagesFetched: number
+  ): void {
+    const { earliestPickupAt, furthestPickupAt } = summarizePickupWindow(batch.data);
+
+    if (OFFERS_TRACE_ENABLED) {
+      logger.info(`[OFFERS_TRACE] offers batch for ${this.label}`, {
+        count: batch.data.length,
+        orderBy,
+        pagesFetched,
+        earliestPickupAt,
+        furthestPickupAt,
+        envelopeKeys: extractEnvelopeKeys(firstBody),
+      });
+      return;
+    }
+
+    logger.debug(`[OFFERS] offers batch for ${this.label}`, {
+      count: batch.data.length,
+      orderBy,
+      furthestPickupAt,
+    });
   }
 
   /**
