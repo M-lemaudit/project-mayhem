@@ -47,13 +47,40 @@ export class RateLimitError extends Error {
   }
 }
 
-/** Thrown when accepting an offer fails because its state is no longer valid (410 invalid_state). */
+/**
+ * Thrown when accepting an offer fails because the offer is gone: taken by another
+ * chauffeur, expired or cancelled. This is the normal outcome of losing the race, not
+ * an incident, so callers must not escalate it (no webhook alert).
+ */
 export class InvalidOfferStateError extends Error {
-  constructor(message = 'Offer state is not valid (410)') {
+  constructor(
+    message = 'Offer state is not valid (410)',
+    public readonly statusCode?: number,
+    public readonly code?: string
+  ) {
     super(message);
     this.name = 'InvalidOfferStateError';
     Object.setPrototypeOf(this, InvalidOfferStateError.prototype);
   }
+}
+
+/** Error codes/details Blacklane returns when the offer no longer exists or is already taken. */
+const OFFER_GONE_CODE_PATTERN =
+  /invalid_state|not_found|already_(accepted|assigned|taken|booked)|no_longer|expired|unavailable|gone|taken|cancell?ed/i;
+
+/**
+ * True when an accept failure just means we lost the race for the offer.
+ * 404/409/410 are always "offer gone"; other 4xx only when the body says so, to avoid
+ * silencing real problems (403 auth, 422 bad payload with an unrelated detail).
+ */
+function isOfferGoneFailure(
+  status: number | undefined,
+  body: { code?: string; detail?: string } | undefined
+): boolean {
+  if (status === 404 || status === 409 || status === 410) return true;
+  if (status == null || status < 400 || status >= 500) return false;
+  const haystack = `${body?.code ?? ''} ${body?.detail ?? ''}`;
+  return OFFER_GONE_CODE_PATTERN.test(haystack);
 }
 
 /** Format Cookie header like browser: name=value; name2=value2 */
@@ -1277,11 +1304,15 @@ export class BlacklaneApi {
         parsedBody,
         ...this.getErrorDebugSnapshot(error),
       });
-      if (status === 410 && code === 'invalid_state') {
+      if (isOfferGoneFailure(status, parsedBody)) {
         logger.info(
-          `[PRODUCTION] Offer ${offerId} could not be accepted: invalid state (410). Probably already taken or no longer available.`
+          `[PRODUCTION] Offer ${offerId} could not be accepted (${status ?? '?'} ${code ?? 'no code'}). Already taken or no longer available.`
         );
-        throw new InvalidOfferStateError(parsedBody?.detail ?? 'Offer state is not valid (410)');
+        throw new InvalidOfferStateError(
+          parsedBody?.detail ?? `Offer is no longer available (${status ?? '?'})`,
+          status,
+          code
+        );
       }
       throw this.normalizeRequestError(error);
     }

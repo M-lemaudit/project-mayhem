@@ -623,8 +623,12 @@ export class SniperLoop {
                   // Only remove from processedOfferIds for transient errors (no status, 429, 5xx)
                   // so the offer can be retried. For 404/410, do NOT retry — offer won't become
                   // available and removing it causes an infinite accept loop.
-                  const statusCode = extractHttpStatusCode(acceptErr);
-                  const isTransient = !statusCode || statusCode === 429 || statusCode >= 500;
+                  const offerGone = acceptErr instanceof InvalidOfferStateError;
+                  const statusCode = offerGone
+                    ? acceptErr.statusCode
+                    : extractHttpStatusCode(acceptErr);
+                  const isTransient =
+                    !offerGone && (!statusCode || statusCode === 429 || statusCode >= 500);
                   if (isTransient) {
                     this.processedOfferIds.delete(idStr);
                   }
@@ -632,10 +636,7 @@ export class SniperLoop {
                     acceptErr instanceof Error && acceptErr.message
                       ? acceptErr.message
                       : String(acceptErr);
-                  const reason =
-                    acceptErr instanceof InvalidOfferStateError
-                      ? 'invalid_offer_state'
-                      : 'accept_request_failed';
+                  const reason = offerGone ? 'invalid_offer_state' : 'accept_request_failed';
 
                   logger.warn(`${this.logPrefix} Accept request failed for offer ${idStr}`, {
                     offerId: idStr,
@@ -644,7 +645,7 @@ export class SniperLoop {
                     ...toErrorDetails(acceptErr),
                   });
 
-                  if (!(acceptErr instanceof InvalidOfferStateError)) {
+                  if (!offerGone) {
                     await triggerOfferAcceptErrorWebhook(
                       this.botEmail,
                       idStr,
@@ -658,8 +659,9 @@ export class SniperLoop {
                       }
                     );
                   } else {
+                    // Losing the race is routine: log it, never page anyone.
                     logger.info(
-                      `${this.logPrefix} Skipping webhook for expected 410 invalid_state on offer ${idStr}.`
+                      `${this.logPrefix} Offer ${idStr} was already gone (${statusCode ?? '?'}). No alert sent.`
                     );
                   }
 
