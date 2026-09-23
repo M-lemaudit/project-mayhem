@@ -815,13 +815,9 @@ export class BlacklaneApi {
     this.client = null;
     this.absoluteClient = null;
 
-    if (sessionLabel) {
-      logger.warn(
-        `[NETWORK] Rotated API proxy ${sessionLabel} for ${this.label} (reason=${reason}) — ${nextProxyUrl}`
-      );
-    } else {
-      logger.warn(`[NETWORK] Rotated API proxy for ${this.label} (reason=${reason}) — ${nextProxyUrl}`);
-    }
+    // Never log the proxy URL itself: it embeds the provider credentials.
+    const labelPart = sessionLabel ? ` ${sessionLabel}` : '';
+    logger.warn(`[NETWORK] Rotated API proxy${labelPart} for ${this.label} (reason=${reason})`);
   }
 
   setSession(accessToken: string, cookies: AuthCookie[]): void {

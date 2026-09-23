@@ -76,6 +76,31 @@ function resolvePassword(raw: string | null): string {
   return looksEncrypted(raw) ? decrypt(raw) : raw;
 }
 
+/**
+ * Raised when Blacklane's /me fails and no provider ids are known yet. Polling offers without
+ * x-user-bd-id / x-user-lsp-id gets a 401 that looks like an expired token and would push the
+ * bot into ERROR_AUTH, so the instance retries with backoff instead.
+ */
+class ProfileUnavailableError extends Error {
+  constructor(email: string) {
+    super(`User profile (/me) unavailable for ${email}; provider ids unknown.`);
+    this.name = 'ProfileUnavailableError';
+  }
+}
+
+interface ProviderIds {
+  bdId?: string;
+  lspId?: string;
+}
+
+/** Provider ids persisted alongside the session by a previous successful /me call. */
+function readSavedProviderIds(session: Record<string, unknown> | null | undefined): ProviderIds | undefined {
+  const saved = session?.providerIds as Record<string, unknown> | undefined;
+  const bdId = typeof saved?.bdId === 'string' ? saved.bdId : undefined;
+  const lspId = typeof saved?.lspId === 'string' ? saved.lspId : undefined;
+  return bdId || lspId ? { bdId, lspId } : undefined;
+}
+
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -116,6 +141,9 @@ async function runBotInstance(
   let reauthAttempts = 0;
   let consecutiveImmediateFatalErrors = 0;
   let consecutiveProxyNetworkRestarts = 0;
+  let consecutiveProfileFailures = 0;
+  // Survives in-process restarts even when a 401 wipes the stored session.
+  let knownProviderIds = readSavedProviderIds(bot.session);
 
   try {
     while (true) {
@@ -129,6 +157,18 @@ async function runBotInstance(
         const savedSession = await botState.getSession();
         const session = await loginAndGetToken(email, password, savedSession, browserOptions);
 
+        let blacklaneUserId = bot.blacklane_user_id;
+        let bdId: string | undefined;
+        let lspId: string | undefined;
+
+        const profile = await discoverUserProfile(session.accessToken);
+        if (!profile) {
+          if (!knownProviderIds) throw new ProfileUnavailableError(email);
+          ({ bdId, lspId } = knownProviderIds);
+          logger.warn(`${prefix()} /me unavailable; reusing last known provider ids`, { bdId, lspId });
+        }
+        consecutiveProfileFailures = 0;
+
         await botState.saveSession({
           accessToken: session.accessToken,
           cookies: session.cookies,
@@ -136,13 +176,11 @@ async function runBotInstance(
           acceptHeader: session.acceptHeader,
           ...(session.xBlacklaneContext && { xBlacklaneContext: session.xBlacklaneContext }),
           ...(session.xDeviceId && { xDeviceId: session.xDeviceId }),
+          ...(profile && (profile.bdId || profile.lspId)
+            ? { providerIds: { bdId: profile.bdId, lspId: profile.lspId } }
+            : knownProviderIds && { providerIds: knownProviderIds }),
         });
 
-        let blacklaneUserId = bot.blacklane_user_id;
-        let bdId: string | undefined;
-        let lspId: string | undefined;
-
-        const profile = await discoverUserProfile(session.accessToken);
         if (profile) {
           if (!blacklaneUserId) {
             blacklaneUserId = profile.userId;
@@ -155,6 +193,7 @@ async function runBotInstance(
           }
           bdId = profile.bdId;
           lspId = profile.lspId;
+          if (bdId || lspId) knownProviderIds = { bdId, lspId };
           logger.info(`[AUTH] User profile discovered`, { bdId, lspId });
         }
 
@@ -232,6 +271,18 @@ async function runBotInstance(
             ...toErrorDetails(err),
           });
           await new Promise((resolve) => setTimeout(resolve, DB_PING_INTERVAL_MS));
+          continue;
+        }
+
+        if (err instanceof ProfileUnavailableError) {
+          consecutiveProfileFailures += 1;
+          const delayMs = exponentialBackoffWithJitterMs(consecutiveProfileFailures + 2);
+          logger.warn(`${prefix()} ${err.message} Retrying in ${delayMs}ms (attempt ${consecutiveProfileFailures}).`);
+          // /me may have failed because the saved token is stale: force a fresh login next time.
+          await botState.saveSession({}).catch((saveErr) => {
+            logger.warn(`${prefix()} Failed to clear session after profile failure`, { ...toErrorDetails(saveErr) });
+          });
+          await sleepMs(delayMs);
           continue;
         }
 

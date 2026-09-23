@@ -311,7 +311,7 @@ export async function loginAndGetToken(
     const sessionLabel = localProxyUrl ? getProxySessionLabel(localProxyUrl) : undefined;
     if (localProxyUrl && sessionLabel) {
       logger.info(
-        `[AUTH] Using proxy ${sessionLabel} for ${email} (Attempt ${attempt + 1}/${maxAttempts}) — ${localProxyUrl}`
+        `[AUTH] Using proxy ${sessionLabel} for ${email} (Attempt ${attempt + 1}/${maxAttempts})`
       );
     }
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -466,53 +466,66 @@ export interface UserProfile {
   lspId?: string;
 }
 
+const PROFILE_DISCOVERY_ATTEMPTS = 3;
+
 /**
  * Fetch user profile from /me endpoint to get userId, bdId, and lspId.
- * All three are needed as headers for the accept offer endpoint.
+ * All three are needed as headers for the offers and accept endpoints: without bd/lsp ids
+ * Blacklane answers 401 on offers, which the sniper would misread as an expired token.
+ * /me intermittently returns 5xx, so server/network failures are retried; 4xx is not.
  */
 export async function discoverUserProfile(
   accessToken: string
 ): Promise<UserProfile | undefined> {
-  try {
-    const response = await fetch('https://partner-portal-api.blacklane.com/me', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-      },
-    });
-    if (!response.ok) {
-      logger.warn('[AUTH] User profile discovery request failed', {
-        status: response.status,
-        statusText: response.statusText,
+  for (let attempt = 1; attempt <= PROFILE_DISCOVERY_ATTEMPTS; attempt += 1) {
+    const isLastAttempt = attempt === PROFILE_DISCOVERY_ATTEMPTS;
+    try {
+      const response = await fetch('https://partner-portal-api.blacklane.com/me', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
       });
-      return undefined;
+      if (!response.ok) {
+        logger.warn('[AUTH] User profile discovery request failed', {
+          status: response.status,
+          statusText: response.statusText,
+          attempt,
+        });
+        if (response.status < 500 || isLastAttempt) return undefined;
+        await new Promise((resolve) => setTimeout(resolve, 1_000 * attempt));
+        continue;
+      }
+      const data = await response.json() as Record<string, unknown>;
+
+      const rawId = data.id;
+      let userId = '';
+      if (typeof rawId === 'string' && rawId.trim().length > 0) {
+        userId = rawId.trim();
+      } else if (typeof rawId === 'number' && Number.isFinite(rawId)) {
+        userId = String(rawId);
+      }
+      if (!userId) return undefined;
+
+      // /me nests provider IDs under `lsp`:
+      //   lsp.id                     -> x-user-lsp-id
+      //   lsp.businessDistrict.uuid  -> x-user-bd-id
+      const lsp = data.lsp as Record<string, unknown> | undefined;
+      const lspId = asNonEmptyString(lsp?.id);
+      const businessDistrict = lsp?.businessDistrict as Record<string, unknown> | undefined;
+      const bdId = asNonEmptyString(businessDistrict?.uuid);
+
+      return { userId, bdId, lspId };
+    } catch (err) {
+      logger.warn('[AUTH] Error during user profile discovery', {
+        error: err instanceof Error ? err.message : String(err),
+        attempt,
+      });
+      if (isLastAttempt) return undefined;
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * attempt));
     }
-    const data = await response.json() as Record<string, unknown>;
-
-    const rawId = data.id;
-    let userId = '';
-    if (typeof rawId === 'string' && rawId.trim().length > 0) {
-      userId = rawId.trim();
-    } else if (typeof rawId === 'number' && Number.isFinite(rawId)) {
-      userId = String(rawId);
-    }
-    if (!userId) return undefined;
-
-    // /me nests provider IDs under `lsp`:
-    //   lsp.id                     -> x-user-lsp-id
-    //   lsp.businessDistrict.uuid  -> x-user-bd-id
-    const lsp = data.lsp as Record<string, unknown> | undefined;
-    const lspId = asNonEmptyString(lsp?.id);
-    const businessDistrict = lsp?.businessDistrict as Record<string, unknown> | undefined;
-    const bdId = asNonEmptyString(businessDistrict?.uuid);
-
-    return { userId, bdId, lspId };
-  } catch (err) {
-    logger.warn('[AUTH] Error during user profile discovery', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return undefined;
   }
+  return undefined;
 }
 
 function asNonEmptyString(val: unknown): string | undefined {
